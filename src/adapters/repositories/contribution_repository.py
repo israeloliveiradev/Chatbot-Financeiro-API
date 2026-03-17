@@ -32,6 +32,7 @@ class ContributionRepositoryImpl(ContributionRepository):
         model = self._to_model(contribution)
         self.session.add(model)
         await self.session.flush()
+        await self.session.commit()
         return self._to_entity(model)
 
     async def get_by_goal_id(self, goal_id: UUID) -> list[ContributionEntity]:

@@ -98,6 +98,7 @@ class SpendingRepositoryImpl(SpendingRepository):
         model = self._monthly_goal_to_model(monthly_goal)
         merged = await self.session.merge(model)
         await self.session.flush()
+        await self.session.commit()
         return self._monthly_goal_to_entity(merged)
 
     async def get_monthly_goals_pending_80_alert(self, year_month: date) -> list[MonthlyGoalEntity]:
