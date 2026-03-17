@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatbot-financeiro-api"
+version = "1.0.0"
+description = "Backend do assistente financeiro pessoal via WhatsApp"
+requires-python = ">=3.11"
+authors = [
+    { name = "Israel Oliveira", email = "israel@example.com" }
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

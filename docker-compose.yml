@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: chatbot_app
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build: .
+    container_name: chatbot_worker
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    command: celery -A src.infra.celery.app worker --loglevel=info
+
+  beat:
+    build: .
+    container_name: chatbot_beat
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    command: celery -A src.infra.celery.app beat --loglevel=info
+
+  migration:
+    build: .
+    container_name: chatbot_migration
+    env_file:
+      - .env
+    depends_on:
+      - db
+    command: alembic upgrade head
+
+  db:
+    image: postgres:15-alpine
+    container_name: chatbot_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: financial_bot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
