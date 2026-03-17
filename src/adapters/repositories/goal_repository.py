@@ -53,10 +53,12 @@ class GoalRepositoryImpl(GoalRepository):
         model = self._to_model(goal)
         self.session.add(model)
         await self.session.flush()
+        await self.session.commit()
         return self._to_entity(model)
 
     async def update(self, goal: GoalEntity) -> GoalEntity:
         model = self._to_model(goal)
         merged = await self.session.merge(model)
         await self.session.flush()
+        await self.session.commit()
         return self._to_entity(merged)

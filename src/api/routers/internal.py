@@ -93,3 +93,12 @@ async def list_spending(
     summary = await GetMonthlySpending(spending_repo).execute(client.id, date.today())
     
     return StandardResponse(data=summary)
+
+
+@router.get("/categories", summary="Lista categorias", description="Lista todas as categorias de gastos cadastradas.", response_model=StandardResponse)
+async def list_categories(
+    spending_repo: SpendingRepositoryImpl = Depends(get_spending_repository)
+):
+    categories = await spending_repo.get_all_categories()
+    data = [{"id": str(c.id), "name": c.name} for c in categories]
+    return StandardResponse(data=data)
