@@ -8,23 +8,34 @@ from src.adapters.llm.gemini_client import GeminiClient
 from src.adapters.llm.prompt_builder import PromptBuilder
 from src.adapters.messaging.evolution_client import EvolutionClient
 from src.adapters.messaging.webhook_parser import WebhookParser
+
+from src.domain.repositories.client_repository import ClientRepository
+from src.domain.repositories.goal_repository import GoalRepository
+from src.domain.repositories.spending_repository import SpendingRepository
+from src.domain.repositories.contribution_repository import ContributionRepository
+from src.domain.repositories.unit_of_work import UnitOfWork
+
 from src.adapters.repositories.client_repository import ClientRepositoryImpl
 from src.adapters.repositories.goal_repository import GoalRepositoryImpl
 from src.adapters.repositories.spending_repository import SpendingRepositoryImpl
 from src.adapters.repositories.contribution_repository import ContributionRepositoryImpl
+from src.adapters.repositories.unit_of_work import SqlAlchemyUnitOfWork
 
 # DB Repositories
-def get_client_repository(session: AsyncSession = Depends(get_db_session)) -> ClientRepositoryImpl:
+def get_client_repository(session: AsyncSession = Depends(get_db_session)) -> ClientRepository:
     return ClientRepositoryImpl(session)
 
-def get_goal_repository(session: AsyncSession = Depends(get_db_session)) -> GoalRepositoryImpl:
+def get_goal_repository(session: AsyncSession = Depends(get_db_session)) -> GoalRepository:
     return GoalRepositoryImpl(session)
 
-def get_spending_repository(session: AsyncSession = Depends(get_db_session)) -> SpendingRepositoryImpl:
+def get_spending_repository(session: AsyncSession = Depends(get_db_session)) -> SpendingRepository:
     return SpendingRepositoryImpl(session)
 
-def get_contribution_repository(session: AsyncSession = Depends(get_db_session)) -> ContributionRepositoryImpl:
+def get_contribution_repository(session: AsyncSession = Depends(get_db_session)) -> ContributionRepository:
     return ContributionRepositoryImpl(session)
+
+def get_unit_of_work(session: AsyncSession = Depends(get_db_session)) -> UnitOfWork:
+    return SqlAlchemyUnitOfWork(session)
 
 # External Adapters
 def get_redis_session() -> RedisSession:

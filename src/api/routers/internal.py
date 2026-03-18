@@ -2,14 +2,17 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Any, Dict
 
-from src.api.dependencies import get_client_repository, get_goal_repository, get_spending_repository
+from src.api.dependencies import (
+    get_client_repository, get_goal_repository, get_spending_repository, get_unit_of_work
+)
 from src.domain.entities.client import Client
+from src.domain.repositories.client_repository import ClientRepository
+from src.domain.repositories.goal_repository import GoalRepository
+from src.domain.repositories.spending_repository import SpendingRepository
+from src.domain.repositories.unit_of_work import UnitOfWork
 from src.use_cases.get_client_by_phone import GetClientByPhone
 from src.use_cases.get_goals import GetGoals
 from src.use_cases.get_monthly_spending import GetMonthlySpending
-from src.adapters.repositories.client_repository import ClientRepositoryImpl
-from src.adapters.repositories.goal_repository import GoalRepositoryImpl
-from src.adapters.repositories.spending_repository import SpendingRepositoryImpl
 from src.api.schemas import StandardResponse, ClientResponse, ClientCreateRequest, GoalResponse, SpendingSummaryResponse
 
 router = APIRouter(prefix="/internal", tags=["Internal API"])
@@ -17,7 +20,7 @@ router = APIRouter(prefix="/internal", tags=["Internal API"])
 @router.get("/clients/{phone}", summary="Busca cliente", description="Busca um cliente pelo seu número de telefone (ex: 5511999999999).", response_model=StandardResponse)
 async def get_client(
     phone: str,
-    client_repo: ClientRepositoryImpl = Depends(get_client_repository)
+    client_repo: ClientRepository = Depends(get_client_repository)
 ):
     uc = GetClientByPhone(client_repo)
     client = await uc.execute(phone)
@@ -35,7 +38,8 @@ async def get_client(
 @router.post("/clients", summary="Criar cliente", description="Cria um novo cliente na base. Retorna o cliente criado.", status_code=201, response_model=StandardResponse, responses={409: {"description": "Telefone já cadastrado"}})
 async def create_client(
     request: ClientCreateRequest,
-    client_repo: ClientRepositoryImpl = Depends(get_client_repository)
+    client_repo: ClientRepository = Depends(get_client_repository),
+    uow: UnitOfWork = Depends(get_unit_of_work)
 ):
     uc = GetClientByPhone(client_repo)
     if await uc.execute(request.phone):
@@ -46,7 +50,9 @@ async def create_client(
         name=request.name,
         monthly_income=request.monthly_income
     )
-    saved = await client_repo.create(client)
+    
+    async with uow:
+        saved = await client_repo.create(client)
     
     return StandardResponse(message="Cliente criado", data=ClientResponse(
         id=str(saved.id),
@@ -59,8 +65,8 @@ async def create_client(
 @router.get("/clients/{phone}/goals", summary="Lista objetivos", description="Lista objetivos ativos do cliente.", response_model=StandardResponse)
 async def list_goals(
     phone: str,
-    client_repo: ClientRepositoryImpl = Depends(get_client_repository),
-    goal_repo: GoalRepositoryImpl = Depends(get_goal_repository)
+    client_repo: ClientRepository = Depends(get_client_repository),
+    goal_repo: GoalRepository = Depends(get_goal_repository)
 ):
     client = await GetClientByPhone(client_repo).execute(phone)
     if not client:
@@ -83,8 +89,8 @@ async def list_goals(
 @router.get("/clients/{phone}/spending", summary="Resumo de gastos", description="Resumo de gastos do mês atual.", response_model=StandardResponse)
 async def list_spending(
     phone: str,
-    client_repo: ClientRepositoryImpl = Depends(get_client_repository),
-    spending_repo: SpendingRepositoryImpl = Depends(get_spending_repository)
+    client_repo: ClientRepository = Depends(get_client_repository),
+    spending_repo: SpendingRepository = Depends(get_spending_repository)
 ):
     client = await GetClientByPhone(client_repo).execute(phone)
     if not client:
@@ -97,7 +103,7 @@ async def list_spending(
 
 @router.get("/categories", summary="Lista categorias", description="Lista todas as categorias de gastos cadastradas.", response_model=StandardResponse)
 async def list_categories(
-    spending_repo: SpendingRepositoryImpl = Depends(get_spending_repository)
+    spending_repo: SpendingRepository = Depends(get_spending_repository)
 ):
     categories = await spending_repo.get_all_categories()
     data = [{"id": str(c.id), "name": c.name} for c in categories]
