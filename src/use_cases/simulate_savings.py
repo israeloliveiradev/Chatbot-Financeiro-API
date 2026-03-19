@@ -1,3 +1,4 @@
+import math
 from datetime import date
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal
@@ -15,14 +16,15 @@ class SimulateSavings:
         if target_amount <= 0:
             return {"possible": False, "reason": "Objetivo deve ser maior que zero."}
 
-        months_needed = int(-(-target_amount // monthly_saving))  # Ceil division
-        estimated_date = start_date + relativedelta(months=months_needed)
+        # BUG-12 FIX: Usar math.ceil para arredondar para o teto de meses
+        months_needed = math.ceil(float(target_amount) / float(monthly_saving))
+        estimated_date = start_date + relativedelta(months=int(months_needed))
         
         return {
             "possible": True,
-            "months_needed": months_needed,
+            "months_needed": int(months_needed),
             "estimated_date": estimated_date.isoformat(),
             "target_amount": float(target_amount),
             "monthly_saving": float(monthly_saving),
-            "total_saved": float(months_needed * monthly_saving)
+            "total_saved": float(months_needed * float(monthly_saving))
         }

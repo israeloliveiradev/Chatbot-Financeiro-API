@@ -1,76 +1,90 @@
-from typing import Dict, Any, Optional
+import base64
 import logging
+from typing import Dict, Any, Optional
+
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+
 class WebhookMessage(BaseModel):
     phone: str
-    text: str | None = None
-    is_audio: bool = False
-    media_url: str | None = None
+    text: str
     message_id: str
     push_name: str | None = None
+    # Suporte a mensagens de áudio
+    audio_base64: str | None = None
+    audio_mimetype: str | None = None
+
+    @property
+    def has_audio(self) -> bool:
+        return self.audio_base64 is not None
+
+    def get_audio_bytes(self) -> bytes | None:
+        if self.audio_base64:
+            # Linter fix: cast to str or use explicit check
+            return base64.b64decode(str(self.audio_base64))
+        return None
+
 
 class WebhookParser:
     def parse_upsert_message(self, payload: Dict[str, Any]) -> Optional[WebhookMessage]:
         """
         Parseia o payload do webhook de 'messages.upsert' da Evolution API v2.
+        Suporta mensagens de texto e áudio.
+        Retorna None se for mensagem própria, de grupo, ou evento irrelevante.
         """
         event = payload.get("event")
         if event != "messages.upsert":
             return None
-            
+
         data = payload.get("data", {})
         key = data.get("key", {})
-        
+
+        # Ignorar mensagens enviadas pelo próprio bot
         if key.get("fromMe") is True:
             return None
-            
+
         remote_jid = key.get("remoteJid", "")
-        logger.info(f"Webhook event recebido. JID original: {remote_jid}")
-        
-        # Ignorar Grupos, Canais e Status
-        if "@g.us" in remote_jid or "@newsletter" in remote_jid or "@broadcast" in remote_jid:
+        # Ignorar mensagens de grupo
+        if "@g.us" in remote_jid:
             return None
-            
+
         message_id = key.get("id")
         message = data.get("message", {})
-        
-        text = None
-        is_audio = False
-        media_url = None
-        
-        # Texto Simples
+
+        text = ""
+        audio_base64 = None
+        audio_mimetype = None
+
+        # Texto simples
         if "conversation" in message:
             text = message["conversation"]
+        # Texto com resposta/formatação especial
         elif "extendedTextMessage" in message:
             text = message["extendedTextMessage"].get("text", "")
-        
-        # Áudio
+        # Mensagem de áudio (audioMessage na Evolution API v2)
         elif "audioMessage" in message:
-            is_audio = True
-            text = "[Mensagem de Áudio]"
-            media_url = message["audioMessage"].get("url")
-            
-        if not text and not is_audio:
+            audio_msg = message["audioMessage"]
+            # Evolution API v2 pode entregar o base64 diretamente ou via url
+            audio_base64 = audio_msg.get("base64") or data.get("base64")
+            audio_mimetype = audio_msg.get("mimetype", "audio/ogg; codecs=opus")
+
+            if not audio_base64:
+                logger.warning("Mensagem de áudio recebida sem base64. message_id=%s", message_id)
+                return None
+
+        if not text and not audio_base64:
             return None
-            
-        remote_jid_alt = key.get("remoteJidAlt", "")
-        best_jid = remote_jid
-        
-        if "@s.whatsapp.net" in remote_jid_alt:
-            best_jid = remote_jid_alt
-        elif "@s.whatsapp.net" in remote_jid:
-            best_jid = remote_jid
-            
-        phone = best_jid.split("@")[0]
+
         push_name = data.get("pushName")
-        
+        phone = remote_jid.split("@")[0]
+
         return WebhookMessage(
             phone=phone,
-            text=text,
-            is_audio=is_audio,
-            message_id=message_id,
-            push_name=push_name
+            text=str(text),
+            message_id=str(message_id),
+            push_name=push_name,
+            audio_base64=audio_base64,
+            audio_mimetype=audio_mimetype,
         )
