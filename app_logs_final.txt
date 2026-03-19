@@ -1,0 +1,36 @@
+﻿2026-03-19 17:42:26,080 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "select pg_catalog.version()", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,081 INFO sqlalchemy.engine.Engine [raw sql] ()
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[raw sql] ()", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,085 INFO sqlalchemy.engine.Engine select current_schema()
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "select current_schema()", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,085 INFO sqlalchemy.engine.Engine [raw sql] ()
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[raw sql] ()", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,087 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "show standard_conforming_strings", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,088 INFO sqlalchemy.engine.Engine [raw sql] ()
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[raw sql] ()", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,089 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "BEGIN (implicit)", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,114 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.phone, clients.name, clients.monthly_income, clients.created_at, clients.updated_at 
+FROM clients 
+WHERE clients.phone = $1::VARCHAR
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "SELECT clients.id, clients.phone, clients.name, clients.monthly_income, clients.created_at, clients.updated_at \nFROM clients \nWHERE clients.phone = $1::VARCHAR", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,115 INFO sqlalchemy.engine.Engine [generated in 0.00042s] ('5511961605602',)
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[generated in 0.00042s] ('5511961605602',)", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,124 INFO sqlalchemy.engine.Engine INSERT INTO clients (id, phone, name, monthly_income, created_at, updated_at) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::NUMERIC(12, 2), $5::TIMESTAMP WITH TIME ZONE, $6::TIMESTAMP WITH TIME ZONE)
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "INSERT INTO clients (id, phone, name, monthly_income, created_at, updated_at) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::NUMERIC(12, 2), $5::TIMESTAMP WITH TIME ZONE, $6::TIMESTAMP WITH TIME ZONE)", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,124 INFO sqlalchemy.engine.Engine [generated in 0.00036s] (UUID('c3791636-9d5d-44ec-9ba1-cf31a8822912'), '5511961605602', 'Israel', Decimal('3000.0'), datetime.datetime(2026, 3, 19, 17, 42, 26, 121548), datetime.datetime(2026, 3, 19, 17, 42, 26, 121551))
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[generated in 0.00036s] (UUID('c3791636-9d5d-44ec-9ba1-cf31a8822912'), '5511961605602', 'Israel', Decimal('3000.0'), datetime.datetime(2026, 3, 19, 17, 42, 26, 121548), datetime.datetime(2026, 3, 19, 17, 42, 26, 121551))", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:42:26,127 INFO sqlalchemy.engine.Engine COMMIT
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "COMMIT", "trace_id": "5f5032e6-4642-407a-a7d2-ca5c515289e4", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:46:03,617 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "BEGIN (implicit)", "trace_id": "7012ce37-5a90-480b-ba4a-ec69a7380bad", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:46:03,619 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.phone, clients.name, clients.monthly_income, clients.created_at, clients.updated_at 
+FROM clients 
+WHERE clients.phone = $1::VARCHAR
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "SELECT clients.id, clients.phone, clients.name, clients.monthly_income, clients.created_at, clients.updated_at \nFROM clients \nWHERE clients.phone = $1::VARCHAR", "trace_id": "7012ce37-5a90-480b-ba4a-ec69a7380bad", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:46:03,619 INFO sqlalchemy.engine.Engine [cached since 217.5s ago] ('5511961605602',)
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "[cached since 217.5s ago] ('5511961605602',)", "trace_id": "7012ce37-5a90-480b-ba4a-ec69a7380bad", "logger": "sqlalchemy.engine.Engine"}
+2026-03-19 17:46:03,626 INFO sqlalchemy.engine.Engine ROLLBACK
+{"timestamp": null, "level": "INFO", "name": "sqlalchemy.engine.Engine", "message": "ROLLBACK", "trace_id": "7012ce37-5a90-480b-ba4a-ec69a7380bad", "logger": "sqlalchemy.engine.Engine"}

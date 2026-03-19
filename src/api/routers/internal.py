@@ -14,8 +14,13 @@ from src.use_cases.get_client_by_phone import GetClientByPhone
 from src.use_cases.get_goals import GetGoals
 from src.use_cases.get_monthly_spending import GetMonthlySpending
 from src.api.schemas import StandardResponse, ClientResponse, ClientCreateRequest, GoalResponse, SpendingSummaryResponse
+from src.api.security import get_api_key
 
-router = APIRouter(prefix="/internal", tags=["Internal API"])
+router = APIRouter(
+    prefix="/internal",
+    tags=["Internal / Admin"],
+    dependencies=[Depends(get_api_key)]
+)
 
 @router.get("/clients/{phone}", summary="Busca cliente", description="Busca um cliente pelo seu número de telefone (ex: 5511999999999).", response_model=StandardResponse)
 async def get_client(

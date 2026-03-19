@@ -64,7 +64,7 @@ class RedisSession:
             
         await self.save_session(phone, session)
 
-    async def set_pending_action(self, phone: str, action: str, data: Dict[str, Any] = None) -> None:
+    async def set_pending_action(self, phone: str, action: str, data: Optional[Dict[str, Any]] = None) -> None:
         """
         Define uma ação pendente (ex: aguardando confirmação Sim/Não).
         """
@@ -81,3 +81,21 @@ class RedisSession:
         session["pending_action"] = None
         session["pending_data"] = {}
         await self.save_session(phone, session)
+
+    async def get_api_usage(self, phone: str) -> int:
+        """
+        Retorna a contagem de mensagens do usuário nas últimas 24h.
+        """
+        key = f"usage:{phone}"
+        count = await self.redis.get(key)
+        return int(count) if count else 0
+
+    async def increment_api_usage(self, phone: str) -> int:
+        """
+        Incrementa a contagem de mensagens e define TTL de 24h se for novo.
+        """
+        key = f"usage:{phone}"
+        count = await self.redis.incr(key)
+        if count == 1:
+            await self.redis.expire(key, 86400) # 24 horas
+        return count
