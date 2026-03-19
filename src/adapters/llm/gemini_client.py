@@ -9,14 +9,15 @@ import os
 logger = logging.getLogger(__name__)
 
 class GeminiClient:
-    def __init__(self):
+    def __init__(self, prompt_builder=None, tools=None):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             logger.error("GEMINI_API_KEY não configurada")
             raise ValueError("GEMINI_API_KEY não configurada")
         
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.prompt_builder = prompt_builder
+        self.model = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
         
         self.safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},

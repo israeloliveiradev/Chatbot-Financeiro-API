@@ -15,10 +15,11 @@ class WebhookMessage(BaseModel):
     # Suporte a mensagens de áudio
     audio_base64: str | None = None
     audio_mimetype: str | None = None
+    media_url: str | None = None
 
     @property
-    def has_audio(self) -> bool:
-        return self.audio_base64 is not None
+    def is_audio(self) -> bool:
+        return self.audio_base64 is not None or self.media_url is not None
 
     def get_audio_bytes(self) -> bytes | None:
         if self.audio_base64:
@@ -28,7 +29,7 @@ class WebhookMessage(BaseModel):
 
 
 class WebhookParser:
-    def parse_upsert_message(self, payload: Dict[str, Any]) -> Optional[WebhookMessage]:
+    def parse_message(self, payload: Dict[str, Any]) -> Optional[WebhookMessage]:
         """
         Parseia o payload do webhook de 'messages.upsert' da Evolution API v2.
         Suporta mensagens de texto e áudio.
@@ -56,6 +57,7 @@ class WebhookParser:
         text = ""
         audio_base64 = None
         audio_mimetype = None
+        media_url = None
 
         # Texto simples
         if "conversation" in message:
@@ -66,19 +68,19 @@ class WebhookParser:
         # Mensagem de áudio (audioMessage na Evolution API v2)
         elif "audioMessage" in message:
             audio_msg = message["audioMessage"]
-            # Evolution API v2 pode entregar o base64 diretamente ou via url
-            audio_base64 = audio_msg.get("base64") or data.get("base64")
+            audio_base64 = audio_msg.get("base64")
+            media_url = audio_msg.get("url") or data.get("mediaUrl") or data.get("url")
             audio_mimetype = audio_msg.get("mimetype", "audio/ogg; codecs=opus")
 
-            if not audio_base64:
-                logger.warning("Mensagem de áudio recebida sem base64. message_id=%s", message_id)
+            if not audio_base64 and not media_url:
+                logger.warning("Mensagem de áudio recebida sem base64 ou URL. message_id=%s", message_id)
                 return None
 
-        if not text and not audio_base64:
+        if not text and not audio_base64 and not media_url:
             return None
 
         push_name = data.get("pushName")
-        phone = remote_jid.split("@")[0]
+        phone = remote_jid.split("@")[0].split(":")[0]
 
         return WebhookMessage(
             phone=phone,
@@ -87,4 +89,5 @@ class WebhookParser:
             push_name=push_name,
             audio_base64=audio_base64,
             audio_mimetype=audio_mimetype,
+            media_url=media_url
         )

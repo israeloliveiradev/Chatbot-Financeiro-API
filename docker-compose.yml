@@ -27,9 +27,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
 
   evolution:
-    image: atendai/evolution-api:v2.2.3
+    image: evoapicloud/evolution-api:v2.3.6
     container_name: evolution_api
     restart: always
     ports:
@@ -39,22 +40,37 @@ services:
     volumes:
       - evolution_data:/evolution/instances
     environment:
-      - SERVER_URL=http://localhost:8080
+      - SERVER_URL=${EVOLUTION_SERVER_URL}
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - LOG_LEVEL=ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS,WEBSOCKET
+      - LOG_COLOR=true
+      - LOG_BAILEYS=error
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://user:password@db:5432/evolution?sslmode=disable
-      - DATABASE_CONNECTION_CLIENT_NAME=evolution_v2
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_LABELS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - DATABASE_SAVE_IS_ON_WHATSAPP=true
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379
       - CACHE_REDIS_PREFIX_KEY=evolution
-      - WEBHOOK_GLOBAL_ENABLED=true
+      - CACHE_REDIS_SAVE_INSTANCES=false
+      - WEBHOOK_GLOBAL_ENABLED=false
       - WEBHOOK_GLOBAL_URL=http://app:8000/webhook/evolution
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
       - WEBHOOK_EVENTS_MESSAGES_UPDATE=true
       - WEBHOOK_EVENTS_SEND_MESSAGE=true
+      - QRCODE_LIMIT=500
+      - QRCODE_COLOR=#175197
     depends_on:
       db:
         condition: service_healthy
