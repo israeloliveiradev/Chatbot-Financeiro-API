@@ -1,146 +1,175 @@
+import json
+import logging
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, Optional
-import logging
+from typing import Dict, Any, Optional
+import difflib
 
-from src.domain.repositories.client_repository import ClientRepository
-from src.domain.repositories.spending_repository import SpendingRepository
-from src.domain.repositories.goal_repository import GoalRepository
-from src.domain.repositories.contribution_repository import ContributionRepository
-from src.domain.repositories.unit_of_work import UnitOfWork
-from src.adapters.cache.redis_session import RedisSession
-from src.adapters.messaging.evolution_client import EvolutionClient
 from src.adapters.llm.gemini_client import GeminiClient
-
+from src.adapters.llm.prompt_builder import PromptBuilder
+from src.adapters.messaging.evolution_client import EvolutionClient
+from src.domain.repositories.client_repository import ClientRepository
+from src.domain.repositories.goal_repository import GoalRepository
+from src.domain.repositories.spending_repository import SpendingRepository
+from src.domain.repositories.unit_of_work import UnitOfWork
+from src.domain.entities.goal import Goal
+from src.domain.entities.contribution import Contribution
 from src.use_cases.get_client_by_phone import GetClientByPhone
-from src.use_cases.get_monthly_spending import GetMonthlySpending
 from src.use_cases.get_goals import GetGoals
-from src.use_cases.create_goal import CreateGoal
+from src.use_cases.get_monthly_spending import GetMonthlySpending
 from src.use_cases.register_contribution import RegisterContribution
-from src.use_cases.cancel_goal import CancelGoal
-from src.use_cases.simulate_purchase import SimulatePurchase
+from src.use_cases.simulate_savings import SimulateSavings
 
 logger = logging.getLogger(__name__)
 
 class ProcessMessage:
     def __init__(
         self,
-        client_repo: ClientRepository,
-        spending_repo: SpendingRepository,
-        goal_repo: GoalRepository,
-        contribution_repo: ContributionRepository,
         uow: UnitOfWork,
-        redis_session: RedisSession,
-        evolution_client: EvolutionClient,
+        client_repo: ClientRepository,
+        goal_repo: GoalRepository,
+        spending_repo: SpendingRepository,
         gemini_client: GeminiClient,
+        evolution_client: EvolutionClient,
+        prompt_builder: PromptBuilder,
     ):
-        self.client_repo = client_repo
-        self.spending_repo = spending_repo
-        self.goal_repo = goal_repo
-        self.contribution_repo = contribution_repo
         self.uow = uow
-        self.redis_session = redis_session
-        self.evolution_client = evolution_client
+        self.client_repo = client_repo
+        self.goal_repo = goal_repo
+        self.spending_repo = spending_repo
         self.gemini_client = gemini_client
+        self.evolution_client = evolution_client
+        self.prompt_builder = prompt_builder
 
-    async def execute(self, phone: str, text: str):
-        logger.info(f"Processando mensagem de {phone}: {text[:50]}...")
+    async def execute(self, phone: str, text: str, audio_bytes: bytes = None, audio_mimetype: str = None) -> None:
+        """
+        Orquestra o processamento de uma mensagem (texto ou áudio).
+        """
+        # 1. Transcrição se for áudio
+        if not text and audio_bytes:
+            text = await self.gemini_client.transcribe_audio(audio_bytes, audio_mimetype)
+            if not text:
+                await self.evolution_client.send_text_message(phone, "Não consegui entender o áudio. Pode repetir por texto? 🧐")
+                return
+
+        # 2. Busca contexto do cliente
+        client = await GetClientByPhone(self.client_repo).execute(phone)
+        if not client:
+            await self.evolution_client.send_text_message(phone, "Olá! Sou seu assistente financeiro. Para começar, precisamos cadastrar você no sistema via painel administrativo. 😉")
+            return
+
+        # 3. Busca objetivos e resumos (para o prompt)
+        goals = await GetGoals(self.goal_repo).execute(client.id, only_active=True)
+        spendings_summary = await GetMonthlySpending(self.spending_repo).execute(client.id, date.today())
         
-        async with self.uow:
-            # 1. Buscar cliente
-            client = await GetClientByPhone(self.client_repo).execute(phone)
-            if not client:
-                await self.evolution_client.send_text_message(
-                    phone, 
-                    "Olá! Não encontrei seu cadastro. Por favor, entre em contato com o suporte para ativar seu assistente financeiro."
-                )
-                return
+        # Histórico (simulando para o prompt)
+        history = [] # TODO: Buscar histórico real do banco se necessário
 
-            # 2. Carregar sessão
-            session = await self.redis_session.get_session(phone)
-            
-            # 3. Lidar com confirmações pendentes
-            if session.get("pending_action"):
-                await self._handle_pending_action(phone, text, session, client)
-                return
-
-            # 4. Preparar contexto para o LLM
-            current_date = date.today()
-            spendings_summary = await GetMonthlySpending(self.spending_repo).execute(client.id, current_date)
-            goals = await GetGoals(self.goal_repo).execute(client.id)
-            
-            system_prompt = self.gemini_client.prompt_builder.build_system_prompt(
-                client=client,
-                monthly_goals=[],
-                goals=goals,
-                spendings_summary=spendings_summary
-            )
-
-            # 5. Analisar com Gemini
-            try:
-                llm_result = await self.gemini_client.analyze_message(
-                    system_prompt=system_prompt,
-                    history=session["history"],
-                    current_message=text
-                )
-            except Exception as e:
-                logger.error(f"Erro ao chamar Gemini: {e}")
-                await self.evolution_client.send_text_message(phone, "Desculpe, tive um probleminha técnico agora. Pode repetir em instantes?")
-                return
-
-            intent = llm_result.get("intent")
-            data = llm_result.get("extracted_data", {})
-            response_text = llm_result.get("response", "Entendido. Como posso ajudar mais?")
-
-            # 6. Orquestrar Intenções
-            await self._orchestrate_intent(intent, data, client, phone, response_text, current_date)
-
-            # 7. Atualizar Histórico
-            await self.redis_session.add_history(phone, "user", text)
-            await self.redis_session.add_history(phone, "assistant", response_text)
-
-    async def _handle_pending_action(self, phone: str, text: str, session: Dict, client: Any):
-        lower_txt = text.lower().strip()
-        confirm_words = ["sim", "s", "confirmo", "pode", "isso", "ok", "com certeza"]
+        # 4. Reconhecimento de Intent via Gemini
+        prompt = self.prompt_builder.build_system_prompt(
+            client_name=client.name,
+            monthly_income=float(client.monthly_income),
+            goals=[g.__dict__ for g in goals],
+            spendings_summary=spendings_summary,
+            history=history
+        )
         
-        action = session["pending_action"]
-        data = session["pending_data"]
+        full_prompt = f"{prompt}\n\nMENSAGEM DO USUÁRIO: {text}"
+        
+        try:
+            raw_response = await self.gemini_client.analyze_message(full_prompt)
+            # Limpa possíveis backticks de markdown do Gemini
+            clean_json = raw_response.replace("```json", "").replace("```", "").strip()
+            response_data = json.loads(clean_json)
+        except Exception as e:
+            logger.error(f"Erro ao processar resposta do Gemini: {e}")
+            await self.evolution_client.send_text_message(phone, "Ops, me enrolei aqui. Pode falar de novo? 😅")
+            return
 
-        if any(word in lower_txt for word in confirm_words):
-            try:
-                if action == "confirm_create_goal":
-                    await CreateGoal(self.goal_repo).execute(
-                        client.id,
-                        data["title"],
-                        Decimal(str(data["target_amount"])),
-                        date.fromisoformat(data["deadline"]) if data.get("deadline") else None
-                    )
-                    await self.evolution_client.send_text_message(phone, "✅ Meta criada com sucesso!")
-                
-                elif action == "confirm_cancel_goal":
-                    await CancelGoal(self.goal_repo).execute(data["goal_id"])
-                    await self.evolution_client.send_text_message(phone, "🗑️ Meta cancelada.")
-            except Exception as e:
-                logger.error(f"Erro ao processar ação pendente {action}: {e}")
-                await self.evolution_client.send_text_message(phone, "Houve um erro ao processar sua confirmação.")
+        intent = response_data.get("intent", "conversa")
+        reply_text = response_data.get("reply_text", "Em que posso ajudar?")
+        extracted_data = response_data.get("extracted_data", {})
+
+        # 5. Orquestração de Ações
+        if intent == "registrar_aporte":
+            await self._orchestrate_registrar_aporte(phone, client.id, extracted_data, reply_text)
+        elif intent == "simular_poupanca":
+            await self._orchestrate_simular_poupanca(phone, extracted_data, reply_text)
+        elif intent == "cancelar_objetivo":
+            await self._orchestrate_cancelar_objetivo(phone, client.id, extracted_data, reply_text)
         else:
-            await self.evolution_client.send_text_message(phone, "Entendido. Ação cancelada.")
-        
-        await self.redis_session.clear_pending_action(phone)
+            # Intents de simples conversa ou criação de objetivo (que o bot orienta por texto)
+            await self.evolution_client.send_text_message(phone, reply_text)
 
-    async def _orchestrate_intent(self, intent: str, data: Dict, client: Any, phone: str, response_text: str, current_date: date):
-        if intent == "criar_objetivo":
-            if data.get("title") and data.get("target_amount"):
-                await self.redis_session.set_pending_action(phone, "confirm_create_goal", data)
+    async def _orchestrate_registrar_aporte(self, phone: str, client_id: Any, data: Dict[str, Any], reply_text: str):
+        goal_title = data.get("goal_title")
+        amount = data.get("amount")
         
-        elif intent == "simular_compra":
-            cat = data.get("category")
-            amount = data.get("purchase_amount")
-            if cat and amount:
-                sim = await SimulatePurchase(self.spending_repo).execute(client.id, cat, Decimal(str(amount)), current_date)
-                if not sim["can_buy"]:
-                    # Sobrescrevemos ou anexamos o alerta se o LLM não percebeu (redundância senior)
-                    response_text += f"\n\n🚨 *ALERTA:* Notei que isso ultrapassa seu limite em {cat}."
+        if not goal_title or not amount:
+            await self.evolution_client.send_text_message(phone, reply_text)
+            return
+
+        goals = await GetGoals(self.goal_repo).execute(client_id, only_active=True)
+        if not goals:
+            await self.evolution_client.send_text_message(phone, "Você não tem nenhum objetivo ativo para guardar dinheiro. Quer criar um? 🎯")
+            return
+
+        # Fuzzy matching para encontrar o objetivo pelo título
+        goal_names = [g.title for g in goals]
+        matches = difflib.get_close_matches(goal_title, goal_names, n=1, cutoff=0.4)
         
-        # Envia a mensagem final (seja ela qual for)
-        await self.evolution_client.send_text_message(phone, response_text)
+        if not matches:
+            await self.evolution_client.send_text_message(phone, f"Não encontrei nenhum objetivo parecido com '{goal_title}'. Pode confirmar o nome? 🧐")
+            return
+            
+        target_goal = next(g for g in goals if g.title == matches[0])
+        
+        # Executa o aporte
+        uc = RegisterContribution(self.uow, self.goal_repo)
+        await uc.execute(target_goal.id, Decimal(str(amount)))
+        
+        success_msg = f"✅ Boas notícias! Registrei o aporte de R$ {amount:.2f} no objetivo '{target_goal.title}'. Rumo à meta! 🚀\n\n{reply_text}"
+        await self.evolution_client.send_text_message(phone, success_msg)
+
+    async def _orchestrate_simular_poupanca(self, phone: str, data: Dict[str, Any], reply_text: str):
+        target_amount = data.get("target_amount")
+        monthly_saving = data.get("monthly_saving")
+        
+        if not target_amount or not monthly_saving:
+            await self.evolution_client.send_text_message(phone, reply_text)
+            return
+            
+        uc = SimulateSavings()
+        result = await uc.execute(Decimal(str(target_amount)), Decimal(str(monthly_saving)), date.today())
+        
+        if result["possible"]:
+            msg = (
+                f"📊 *Simulação de Poupança*\n\n"
+                f"Para juntar R$ {target_amount:.2f} guardando R$ {monthly_saving:.2f} por mês:\n"
+                f"⏱️ Tempo: {result['months_needed']} meses\n"
+                f"📅 Data prevista: {datetime.fromisoformat(result['estimated_date']).strftime('%m/%Y')}\n\n"
+                f"{reply_text}"
+            )
+        else:
+            msg = f"❌ Não consegui simular: {result.get('reason')}\n\n{reply_text}"
+            
+        await self.evolution_client.send_text_message(phone, msg)
+
+    async def _orchestrate_cancelar_objetivo(self, phone: str, client_id: Any, data: Dict[str, Any], reply_text: str):
+        # Para cancelamento, o bot apenas confirma via texto por enquanto, 
+        # ou podemos implementar a deleção real se o cliente confirmar.
+        # Aqui vamos apenas buscar se existe o objetivo para dar uma resposta melhor.
+        goal_title = data.get("goal_title")
+        if not goal_title:
+             await self.evolution_client.send_text_message(phone, reply_text)
+             return
+             
+        goals = await GetGoals(self.goal_repo).execute(client_id, only_active=True)
+        goal_names = [g.title for g in goals]
+        matches = difflib.get_close_matches(goal_title, goal_names, n=1, cutoff=0.5)
+        
+        if matches:
+            await self.evolution_client.send_text_message(phone, f"Entendido. Você quer cancelar '{matches[0]}'. Para confirmar, use o nosso painel administrativo ou peça explicitamente aqui. (Funcionalidade em implementação 🚧)\n\n{reply_text}")
+        else:
+            await self.evolution_client.send_text_message(phone, reply_text)
+from datetime import datetime

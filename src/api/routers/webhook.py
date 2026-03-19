@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, Request, BackgroundTasks
+from pydantic import BaseModel
+from typing import Optional
 from src.infra.config import settings
 from src.infra.database.session import AsyncSessionLocal
 from src.api.dependencies import (
@@ -17,15 +19,18 @@ from src.adapters.repositories.spending_repository import SpendingRepositoryImpl
 from src.adapters.repositories.contribution_repository import ContributionRepositoryImpl
 from src.adapters.repositories.unit_of_work import SqlAlchemyUnitOfWork
 
+from src.adapters.llm.tools import FINANCIAL_TOOLS
 from src.use_cases.process_message import ProcessMessage
 
-router = APIRouter(tags=["Webhook"])
+router = APIRouter(prefix="/webhook", tags=["Webhook"])
 
-async def background_process_message(phone: str, text: str):
+class SimulateMessageRequest(BaseModel):
+    phone: str
+    text: str
+
+async def background_process_message(phone: str, text: str, message_id: Optional[str] = None, is_audio: bool = False, media_url: Optional[str] = None):
     """
-    Executa o processamento da mensagem em background, garantindo que
-    cada execução tenha seu próprio ciclo de vida de sessão de banco de dados.
-    Isso evita problemas com sessões fechadas pelo escopo da Request do FastAPI.
+    Executa o processamento da mensagem em background com suporte a áudio.
     """
     async with AsyncSessionLocal() as session:
         # Criando adaptadores com a sessão local
@@ -35,11 +40,11 @@ async def background_process_message(phone: str, text: str):
         goal_repo = GoalRepositoryImpl(session)
         contribution_repo = ContributionRepositoryImpl(session)
         
-        # Adaptadores externos (não dependem de sessão DB)
+        # Adaptadores externos
         redis_session = RedisSession()
         evolution_client = EvolutionClient()
         prompt_builder = PromptBuilder()
-        gemini_client = GeminiClient(prompt_builder)
+        gemini_client = GeminiClient(prompt_builder, tools=FINANCIAL_TOOLS)
         
         use_case = ProcessMessage(
             client_repo=client_repo,
@@ -52,38 +57,44 @@ async def background_process_message(phone: str, text: str):
             gemini_client=gemini_client
         )
         
-        await use_case.execute(phone, text)
+        await use_case.execute(phone=phone, text=text, message_id=message_id, is_audio=is_audio, media_url=media_url)
 
-
-@router.post("/webhook/evolution", summary="Recebe mensagens", description="Recebe mensagens da Evolution API WhatsApp")
+@router.post("/evolution")
 async def evolution_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     parser: WebhookParser = Depends(get_webhook_parser)
 ):
-    payload = await request.json()
-    msg = parser.parse_upsert_message(payload)
+    """
+    Recebe webhooks da Evolution API.
+    """
+    data = await request.json()
+    print(f"RAW WEBHOOK DATA: {data}", flush=True) # DEBUg
     
-    if not msg:
+    # Validação de Instância (Segurança Fase 3)
+    instance = data.get("instance")
+    if instance != settings.evolution_instance:
+        return {"status": "ignored", "reason": "invalid_instance"}
+        
+    message = parser.parse_upsert_message(data)
+    if not message:
         return {"status": "ignored"}
         
-    # Agendamos a tarefa de background usando uma função que gerencia sua própria sessão
-    background_tasks.add_task(background_process_message, msg.phone, msg.text)
+    background_tasks.add_task(
+        background_process_message,
+        phone=message.phone,
+        text=message.text,
+        message_id=message.message_id,
+        is_audio=message.is_audio,
+        media_url=message.media_url
+    )
     
-    return {"status": "ok"}
+    return {"status": "queued"}
 
-
-if settings.app_env == "development":
-    from pydantic import BaseModel
-    
-    class SimulateMessageRequest(BaseModel):
-        phone: str
-        text: str
-
-    @router.post("/dev/simulate-message", tags=["Dev / Testes"], summary="Simulador (DEV ONLY)")
-    async def simulate_message(
-        req: SimulateMessageRequest
-    ):
-        # Para o simulador, também usamos a versão isolada para garantir consistência
-        await background_process_message(req.phone, req.text)
-        return {"status": "simulated"}
+@router.post("/dev/simulate-message", tags=["Dev / Testes"], summary="Simulador (DEV ONLY)")
+async def simulate_message(
+    req: SimulateMessageRequest
+):
+    """Simula uma mensagem para testes rápidos."""
+    await background_process_message(req.phone, req.text)
+    return {"status": "simulated"}

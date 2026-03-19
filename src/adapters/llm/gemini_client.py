@@ -1,71 +1,66 @@
-import json
-from typing import Dict, Any, List
+import logging
+from typing import List, Dict, Any, Optional
 
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google.generativeai.types import content_types
+from pydantic import BaseModel
+import os
 
-from src.infra.config import settings
-from src.adapters.llm.prompt_builder import PromptBuilder
+logger = logging.getLogger(__name__)
 
 class GeminiClient:
-    def __init__(self, prompt_builder: PromptBuilder):
-        self.prompt_builder = prompt_builder
-        genai.configure(api_key=settings.gemini_api_key)
+    def __init__(self):
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.error("GEMINI_API_KEY não configurada")
+            raise ValueError("GEMINI_API_KEY não configurada")
         
-        # Configure model parameters
-        self.generation_config = {
-            "temperature": 0.2,
-            "top_p": 0.95,
-            "top_k": 64,
-            "max_output_tokens": 1024,
-            "response_mime_type": "application/json",
-        }
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Safety settings
-        self.safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-        
-        self.model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            generation_config=self.generation_config,
-            safety_settings=self.safety_settings,
-        )
+        self.safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
 
-    async def analyze_message(
-        self, 
-        system_prompt: str, 
-        history: List[Dict[str, str]], 
-        current_message: str
-    ) -> Dict[str, Any]:
+    async def analyze_message(self, prompt: str, history: List[Dict[str, str]] = None) -> str:
         """
-        Envia a mensagem atual junto com o histórico e instruções de sistema para o Gemini.
-        Espera um JSON de resposta ditado pela configuração.
+        Analisa a mensagem do usuário usando o Gemini 1.5.
+        Retorna a resposta do modelo (geralmente um JSON formatado).
         """
+        chat = self.model.start_chat(history=[])
         
-        formatted_history = []
-        for msg in history:
-            formatted_history.append({
-                "role": "model" if msg["role"] == "assistant" else "user",
-                "parts": [msg["content"]]
-            })
-            
-        chat = self.model.start_chat(history=formatted_history)
-        
-        # O system_prompt é anexado à mensagem atual para reforçar o contexto JSON a cada turno
-        full_message = f"{system_prompt}\n\nMENSAGEM DO USUÁRIO:\n{current_message}"
-        
-        response = chat.send_message(full_message)
+        # Converte o histórico para o formato do Gemini se necessário
+        # (Para o MVP, estamos enviando o histórico completo no prompt do sistema via PromptBuilder)
         
         try:
-            return json.loads(response.text)
-        except json.JSONDecodeError:
-            # Fallback for unexpected format
-            return {
-                "intent": "desconhecido",
-                "extracted_data": {},
-                "response": "Desculpe, tive um problema ao interpretar sua mensagem."
-            }
+            # BUG-01 FIX: Usar send_message_async e await
+            response = await chat.send_message_async(
+                prompt,
+                safety_settings=self.safety_settings
+            )
+            return response.text
+        except Exception as e:
+            logger.error(f"Erro ao chamar Gemini: {e}")
+            raise
+
+    async def transcribe_audio(self, audio_bytes: bytes, mime_type: str) -> str:
+        """
+        Transcreve um áudio usando as capacidades multimodais do Gemini.
+        """
+        try:
+            # Gemini 1.5 suporta áudio diretamente como parte do conteúdo
+            contents = [
+                {
+                    "mime_type": mime_type,
+                    "data": audio_bytes
+                },
+                "Transcreva exatamente o que foi dito neste áudio. Retorne apenas o texto transcrito, sem comentários adicionais."
+            ]
+            response = await self.model.generate_content_async(contents)
+            return response.text
+        except Exception as e:
+            logger.error(f"Erro na transcrição de áudio: {e}")
+            return ""

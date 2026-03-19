@@ -1,31 +1,48 @@
+import logging
 import httpx
-from typing import Dict, Any
+import os
+from typing import Optional
 
-from src.infra.config import settings
+logger = logging.getLogger(__name__)
 
 class EvolutionClient:
     def __init__(self):
-        self.base_url = settings.evolution_base_url.rstrip("/")
-        self.instance = settings.evolution_instance
-        self.api_key = settings.evolution_api_key
+        self.base_url = os.getenv("EVOLUTION_BASE_URL", "http://evolution:8080")
+        self.api_key = os.getenv("EVOLUTION_API_KEY")
+        self.instance = os.getenv("EVOLUTION_INSTANCE", "MainInstance")
         
-        self.headers = {
+        if not self.api_key:
+            logger.error("EVOLUTION_API_KEY não configurada")
+            raise ValueError("EVOLUTION_API_KEY não configurada")
+
+    async def send_text_message(self, number: str, text: str):
+        """
+        Envia uma mensagem de texto via Evolution API.
+        """
+        url = f"{self.base_url}/message/sendText/{self.instance}"
+        headers = {
             "apikey": self.api_key,
             "Content-Type": "application/json"
         }
-
-    async def send_text_message(self, phone: str, text: str) -> Dict[str, Any]:
-        """
-        Envia uma mensagem de texto para o cliente vi WhatsApp usando a Evolution API.
-        """
-        url = f"{self.base_url}/message/sendText/{self.instance}"
-        
         payload = {
-            "number": phone,
-            "text": text
+            "number": number,
+            "text": text,
+            "delay": 1200,
+            "linkPreview": False
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=self.headers)
-            response.raise_for_status()
-            return response.json()
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                logger.info(f"Mensagem enviada para {number}")
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Erro HTTP ao enviar mensagem: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"Erro de rede ao enviar mensagem: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Erro inesperado ao enviar mensagem para {number}: {e}")
+            raise

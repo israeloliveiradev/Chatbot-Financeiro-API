@@ -37,6 +37,8 @@ def get_contribution_repository(session: AsyncSession = Depends(get_db_session))
 def get_unit_of_work(session: AsyncSession = Depends(get_db_session)) -> UnitOfWork:
     return SqlAlchemyUnitOfWork(session)
 
+from src.adapters.llm.tools import FINANCIAL_TOOLS
+
 # External Adapters
 def get_redis_session() -> RedisSession:
     return RedisSession()
@@ -45,7 +47,7 @@ def get_prompt_builder() -> PromptBuilder:
     return PromptBuilder()
 
 def get_gemini_client(prompt_builder: PromptBuilder = Depends(get_prompt_builder)) -> GeminiClient:
-    return GeminiClient(prompt_builder)
+    return GeminiClient(prompt_builder, tools=FINANCIAL_TOOLS)
 
 def get_evolution_client() -> EvolutionClient:
     return EvolutionClient()
