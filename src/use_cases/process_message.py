@@ -8,9 +8,11 @@ import difflib
 from src.adapters.llm.gemini_client import GeminiClient
 from src.adapters.llm.prompt_builder import PromptBuilder
 from src.adapters.messaging.evolution_client import EvolutionClient
+from src.adapters.messaging.formatter import MessageFormatter
 from src.domain.repositories.client_repository import ClientRepository
 from src.domain.repositories.goal_repository import GoalRepository
 from src.domain.repositories.spending_repository import SpendingRepository
+from src.domain.repositories.contribution_repository import ContributionRepository
 from src.domain.repositories.unit_of_work import UnitOfWork
 from src.domain.entities.goal import Goal
 from src.domain.entities.contribution import Contribution
@@ -32,30 +34,50 @@ class ProcessMessage:
         gemini_client: GeminiClient,
         evolution_client: EvolutionClient,
         prompt_builder: PromptBuilder,
+        contribution_repo: ContributionRepository
     ):
         self.uow = uow
         self.client_repo = client_repo
         self.goal_repo = goal_repo
         self.spending_repo = spending_repo
+        self.contribution_repo = contribution_repo
         self.gemini_client = gemini_client
         self.evolution_client = evolution_client
         self.prompt_builder = prompt_builder
 
-    async def execute(self, phone: str, text: str, audio_bytes: bytes = None, audio_mimetype: str = None) -> None:
+    async def execute(self, phone: str, text: str, message_id: Optional[str] = None, is_audio: bool = False, media_url: Optional[str] = None) -> None:
         """
         Orquestra o processamento de uma mensagem (texto ou áudio).
         """
         # 1. Transcrição se for áudio
-        if not text and audio_bytes:
-            text = await self.gemini_client.transcribe_audio(audio_bytes, audio_mimetype)
+        if is_audio and not text:
+            audio_bytes = None
+            # Tenta pegar bytes se já vieram (simulações/etc) ou baixa via URL
+            if media_url:
+                try:
+                    logger.info(f"Baixando áudio da URL: {media_url}")
+                    audio_bytes = await self.evolution_client.download_media(media_url)
+                except Exception as e:
+                    logger.error(f"Erro ao baixar áudio: {e}")
+            
+            if audio_bytes:
+                # Gemini consegue processar o áudio diretamente
+                text = await self.gemini_client.transcribe_audio(audio_bytes, "audio/ogg")
+            
             if not text:
-                await self.evolution_client.send_text_message(phone, "Não consegui entender o áudio. Pode repetir por texto? 🧐")
+                error_msg = MessageFormatter.error("Não consegui processar seu áudio. Pode digitar o que precisa ou tentar novamente? 🧐")
+                await self.evolution_client.send_text_message(phone, error_msg)
                 return
 
         # 2. Busca contexto do cliente
+        logger.info(f"[PROCESS] Iniciando busca de cliente para o número: {phone}")
         client = await GetClientByPhone(self.client_repo).execute(phone)
         if not client:
-            await self.evolution_client.send_text_message(phone, "Olá! Sou seu assistente financeiro. Para começar, precisamos cadastrar você no sistema via painel administrativo. 😉")
+            logger.warning(f"[PROCESS] Cliente NÃO encontrado no banco para o número: {phone}")
+            msg = MessageFormatter.header("Bem-vindo!")
+            msg += "Olá! Sou seu assistente financeiro pessoal. 👋\n\nNo momento, ainda não encontrei seu cadastro no nosso sistema. Por favor, entre em contato com o suporte ou realize o cadastro via painel para começarmos a organizar suas finanças! 😉"
+            msg += MessageFormatter.footer()
+            await self.evolution_client.send_text_message(phone, msg)
             return
 
         # 3. Busca objetivos e resumos (para o prompt)
@@ -125,10 +147,14 @@ class ProcessMessage:
         target_goal = next(g for g in goals if g.title == matches[0])
         
         # Executa o aporte
-        uc = RegisterContribution(self.uow, self.goal_repo)
+        uc = RegisterContribution(self.contribution_repo, self.goal_repo)
         await uc.execute(target_goal.id, Decimal(str(amount)))
         
-        success_msg = f"✅ Boas notícias! Registrei o aporte de R$ {amount:.2f} no objetivo '{target_goal.title}'. Rumo à meta! 🚀\n\n{reply_text}"
+        success_msg = MessageFormatter.format_transaction_success(
+            category=f"Aporte: {target_goal.title}",
+            amount=float(amount),
+            description=f"Aporte automático via assistente. {reply_text}"
+        )
         await self.evolution_client.send_text_message(phone, success_msg)
 
     async def _orchestrate_simular_poupanca(self, phone: str, data: Dict[str, Any], reply_text: str):

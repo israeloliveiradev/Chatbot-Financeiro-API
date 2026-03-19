@@ -12,6 +12,9 @@ from src.adapters.messaging.evolution_client import EvolutionClient
 from src.adapters.cache.redis_session import RedisSession
 from src.adapters.llm.gemini_client import GeminiClient
 from src.adapters.llm.prompt_builder import PromptBuilder
+from src.infra.logging import get_logger
+
+logger = get_logger(__name__)
 
 from src.adapters.repositories.client_repository import ClientRepositoryImpl
 from src.adapters.repositories.goal_repository import GoalRepositoryImpl
@@ -33,31 +36,30 @@ async def background_process_message(phone: str, text: str, message_id: Optional
     Executa o processamento da mensagem em background com suporte a áudio.
     """
     async with AsyncSessionLocal() as session:
-        # Criando adaptadores com a sessão local
         uow = SqlAlchemyUnitOfWork(session)
         client_repo = ClientRepositoryImpl(session)
         spending_repo = SpendingRepositoryImpl(session)
         goal_repo = GoalRepositoryImpl(session)
         contribution_repo = ContributionRepositoryImpl(session)
         
-        # Adaptadores externos
         redis_session = RedisSession()
         evolution_client = EvolutionClient()
         prompt_builder = PromptBuilder()
         gemini_client = GeminiClient(prompt_builder, tools=FINANCIAL_TOOLS)
         
         use_case = ProcessMessage(
-            client_repo=client_repo,
-            spending_repo=spending_repo,
-            goal_repo=goal_repo,
-            contribution_repo=contribution_repo,
             uow=uow,
-            redis_session=redis_session,
+            client_repo=client_repo,
+            goal_repo=goal_repo,
+            spending_repo=spending_repo,
+            contribution_repo=contribution_repo,
+            gemini_client=gemini_client,
             evolution_client=evolution_client,
-            gemini_client=gemini_client
+            prompt_builder=prompt_builder
         )
         
         await use_case.execute(phone=phone, text=text, message_id=message_id, is_audio=is_audio, media_url=media_url)
+
 
 @router.post("/evolution")
 async def evolution_webhook(
@@ -68,18 +70,31 @@ async def evolution_webhook(
     """
     Recebe webhooks da Evolution API.
     """
-    data = await request.json()
-    print(f"RAW WEBHOOK DATA: {data}", flush=True) # DEBUg
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "ignored", "reason": "invalid_json"}
     
-    # Validação de Instância (Segurança Fase 3)
+    event = data.get("event", "")
     instance = data.get("instance")
+    
+    logger.info(f"[WEBHOOK] Event: {event}, Instance: {instance}")
+    
+    # Validação de Instância
     if instance != settings.evolution_instance:
         return {"status": "ignored", "reason": "invalid_instance"}
-        
-    message = parser.parse_upsert_message(data)
+    
+    # Ignorar eventos que não são mensagens novas (retornar 200 para evitar retry!)
+    if event != "messages.upsert":
+        return {"status": "ignored", "reason": f"event_{event}"}
+    
+    # Parsear mensagem
+    message = parser.parse_message(data)
     if not message:
         return {"status": "ignored"}
-        
+    
+    logger.info(f"[WEBHOOK] Processing message from {message.phone}: {message.text[:50]}")
+    
     background_tasks.add_task(
         background_process_message,
         phone=message.phone,
@@ -90,6 +105,7 @@ async def evolution_webhook(
     )
     
     return {"status": "queued"}
+
 
 @router.post("/dev/simulate-message", tags=["Dev / Testes"], summary="Simulador (DEV ONLY)")
 async def simulate_message(

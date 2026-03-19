@@ -24,8 +24,13 @@ class EvolutionClient:
             "apikey": self.api_key,
             "Content-Type": "application/json"
         }
+        # Garantir que o número tenha o formato JID se for apenas dígitos
+        recipient = number
+        if "@" not in recipient:
+            recipient = f"{recipient}@s.whatsapp.net"
+
         payload = {
-            "number": number,
+            "number": recipient,
             "text": text,
             "delay": 1200,
             "linkPreview": False
@@ -46,3 +51,19 @@ class EvolutionClient:
         except Exception as e:
             logger.error(f"Erro inesperado ao enviar mensagem para {number}: {e}")
             raise
+
+    async def download_media(self, media_url: str) -> Optional[bytes]:
+        """
+        Faz o download de um arquivo de mídia (áudio, imagem, etc) da Evolution API.
+        """
+        headers = {
+            "apikey": self.api_key
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(media_url, headers=headers)
+                response.raise_for_status()
+                return response.content
+        except Exception as e:
+            logger.error(f"Erro ao baixar mídia da Evolution ({media_url}): {e}")
+            return None

@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from src.infra.config import settings
 from src.infra.logging import setup_logging, get_logger
 from src.api.middleware import TraceIDMiddleware
-from src.api.routers import internal, webhook
+from src.api.routers import webhook
 
 # Initialize structured logging
 setup_logging()
@@ -31,8 +31,12 @@ app.add_middleware(
 
 from src.domain.exceptions import DomainException
 
+from src.api.routers import clients, goals, spending, webhook
+
 # Include routers
-app.include_router(internal.router)
+app.include_router(clients.router)
+app.include_router(goals.router)
+app.include_router(spending.router)
 app.include_router(webhook.router)
 
 @app.exception_handler(DomainException)
