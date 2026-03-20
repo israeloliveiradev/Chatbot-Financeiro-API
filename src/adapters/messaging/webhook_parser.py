@@ -23,7 +23,6 @@ class WebhookMessage(BaseModel):
 
     def get_audio_bytes(self) -> bytes | None:
         if self.audio_base64:
-            # Linter fix: cast to str or use explicit check
             return base64.b64decode(str(self.audio_base64))
         return None
 
@@ -73,14 +72,29 @@ class WebhookParser:
             audio_mimetype = audio_msg.get("mimetype", "audio/ogg; codecs=opus")
 
             if not audio_base64 and not media_url:
-                logger.warning("Mensagem de áudio recebida sem base64 ou URL. message_id=%s", message_id)
+                logger.warning(
+                    "Mensagem de áudio recebida sem base64 ou URL. message_id=%s",
+                    message_id
+                )
                 return None
 
         if not text and not audio_base64 and not media_url:
             return None
 
         push_name = data.get("pushName")
-        phone = remote_jid.split("@")[0].split(":")[0]
+
+        # Se o JID principal for @lid (ID interno do WhatsApp),
+        # usar o remoteJidAlt que contém o número real
+        remote_jid_alt = key.get("remoteJidAlt", "")
+        if "@lid" in remote_jid and remote_jid_alt:
+            phone = remote_jid_alt.split("@")[0].split(":")[0]
+            logger.info(
+                "JID do tipo LID detectado. Usando remoteJidAlt: %s -> phone: %s",
+                remote_jid,
+                phone
+            )
+        else:
+            phone = remote_jid.split("@")[0].split(":")[0]
 
         return WebhookMessage(
             phone=phone,
