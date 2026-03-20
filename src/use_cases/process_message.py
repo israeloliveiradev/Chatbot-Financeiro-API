@@ -114,18 +114,29 @@ class ProcessMessage:
 
         try:
             raw_response = await self.gemini_client.analyze_message(full_prompt)
-
-            # Proteção contra None
+            # 4. Processamento da Resposta do Gemini
             if not raw_response:
                 raise ValueError("Gemini retornou resposta vazia")
 
-            # Limpa possíveis backticks de markdown do Gemini
-            clean_json = raw_response.replace("```json", "").replace("```", "").strip()
-            response_data = json.loads(clean_json)
+            # 4.1 Parser de Resposta (Resiliência a erros de JSON)
+            if isinstance(raw_response, dict):
+                response_data = raw_response
+            else:
+                try:
+                    # Limpa possíveis backticks de markdown
+                    clean_json = str(raw_response).replace("```json", "").replace("```", "").strip()
+                    response_data = json.loads(clean_json)
+                except json.JSONDecodeError:
+                    logger.warning(f"[PROCESS] Falha ao decodificar JSON. Tratando como conversa: {raw_response}")
+                    response_data = {
+                        "intent": "conversa",
+                        "extracted_data": {},
+                        "reply_text": str(raw_response)
+                    }
         except Exception as e:
-            logger.error(f"Erro ao processar resposta do Gemini: {e}")
+            logger.error(f"Erro crítico ao processar resposta: {e}")
             await self.evolution_client.send_text_message(
-                phone, "Ops, me enrolei aqui. Pode falar de novo? 😅"
+                phone, "Desculpe, tive um problema técnico. Pode tentar novamente? 😅"
             )
             return
 

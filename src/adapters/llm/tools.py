@@ -37,11 +37,45 @@ def obter_resumo_mensal():
     """
     pass
 
+def registrar_aporte(goal_title: str, amount: float):
+    """
+    Registra um novo valor guardado (aporte) para um objetivo específico.
+    :param goal_title: Título do objetivo (conforme a lista de objetivos ativos).
+    :param amount: Valor do aporte.
+    """
+    pass
+
+def simular_poupanca(target_amount: float, monthly_saving: float):
+    """
+    Simula em quanto tempo o cliente atingirá um valor alvo guardando uma quantia mensal.
+    :param target_amount: Valor que deseja atingir.
+    :param monthly_saving: Quanto o cliente consegue guardar por mês.
+    """
+    pass
+
+def cancelar_objetivo(goal_title: str):
+    """
+    Remove/Cancela um objetivo financeiro.
+    :param goal_title: Título do objetivo a ser cancelado.
+    """
+    pass
+
+def responder_conversa(reply_text: str):
+    """
+    Responde mensagens gerais, saudações, dúvidas ou qualquer interação que não exija uma das outras ferramentas.
+    :param reply_text: O texto da resposta amigável para o usuário.
+    """
+    pass
+
 # List of tools to be passed to Gemini
 FINANCIAL_TOOLS = [
     registrar_gasto,
     criar_objetivo,
     listar_objetivos,
     definir_meta_mensal,
-    obter_resumo_mensal
+    obter_resumo_mensal,
+    registrar_aporte,
+    simular_poupanca,
+    cancelar_objetivo,
+    responder_conversa
 ]

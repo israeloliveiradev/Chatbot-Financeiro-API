@@ -12,9 +12,13 @@ logger = logging.getLogger(__name__)
 _TOOL_TO_INTENT = {
     "criar_objetivo": "criar_objetivo",
     "registrar_gasto": "simular_compra",
-    "listar_objetivos": "conversa",
+    "registrar_aporte": "registrar_aporte",
+    "simular_poupanca": "simular_poupanca",
+    "cancelar_objetivo": "cancelar_objetivo",
+    "listar_objetivos": "listar_objetivos",
     "definir_meta_mensal": "definir_meta_mensal",
-    "obter_resumo_mensal": "conversa",
+    "obter_resumo_mensal": "obter_resumo_mensal",
+    "responder_conversa": "conversa",
 }
 
 
@@ -67,12 +71,15 @@ class GeminiClient:
         args = dict(function_call.args) if function_call.args else {}
         intent = _TOOL_TO_INTENT.get(name, "conversa")
 
-        logger.info(f"[GEMINI] Function call: {name}({args})")
+        # Se for responder_conversa, o reply_text vem dos argumentos
+        reply_text = args.get("reply_text", "") if intent == "conversa" else ""
+
+        logger.info(f"[GEMINI] Function call: {name}({args}) -> intent: {intent}")
 
         result = {
             "intent": intent,
             "extracted_data": args,
-            "reply_text": "",
+            "reply_text": reply_text,
         }
 
         return json.dumps(result, ensure_ascii=False)
@@ -80,7 +87,7 @@ class GeminiClient:
     async def analyze_message(self, prompt: str, history: List[Dict[str, str]] = None) -> str:
         """
         Analisa a mensagem do usuário usando o Gemini.
-        Retorna a resposta do modelo (JSON formatado ou function_call convertido).
+        Retorna SEMPRE uma string JSON válida para o process_message.
         """
         try:
             config = types.GenerateContentConfig(
@@ -94,23 +101,39 @@ class GeminiClient:
                 config=config,
             )
 
+            # Log para debug (útil se o JSON falhar)
+            logger.debug(f"[GEMINI] Raw Response: {response}")
+
             # 1) Verificar se veio function_call
             if response.candidates:
                 for part in response.candidates[0].content.parts:
                     if part.function_call:
                         return self._function_call_to_json(part.function_call)
 
-            # 2) Se veio texto, retorna normalmente
+            # 2) Se veio texto livre (não-tool), envelopamos como 'conversa'
             if response.text:
-                return response.text
+                text = response.text.strip()
+                # Se o Gemini ignorar as tools e retornar JSON por conta própria, tentamos validar
+                if text.startswith("{") and text.endswith("}"):
+                    try:
+                        json.loads(text)
+                        return text # Já é um JSON
+                    except:
+                        pass
+                
+                # Caso contrário, envelopamos
+                return json.dumps({
+                    "intent": "conversa",
+                    "extracted_data": {},
+                    "reply_text": text
+                }, ensure_ascii=False)
 
-            # 3) Fallback: resposta vazia
-            logger.warning("[GEMINI] Resposta vazia (sem text nem function_call)")
+            # 3) Fallback absoluto para evitar erro no process_message
             return json.dumps({
                 "intent": "conversa",
                 "extracted_data": {},
-                "reply_text": "Desculpe, não consegui processar sua mensagem. Pode tentar de novo? 🤔"
-            })
+                "reply_text": "Desculpe, me perdi um pouco. Pode repetir? 😅"
+            }, ensure_ascii=False)
 
         except Exception as e:
             logger.error(f"Erro ao chamar Gemini: {e}")
