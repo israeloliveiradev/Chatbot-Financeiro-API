@@ -29,7 +29,7 @@ def mock_contribution_repo():
     return AsyncMock()
 
 @pytest.fixture
-def mock_gemini_client():
+def mock_llm_client():
     client = AsyncMock()
     # Mock padrão de análise de mensagem (conversa)
     client.analyze_message.return_value = '{"intent": "conversa", "reply_text": "Olá!", "extracted_data": {}}'
