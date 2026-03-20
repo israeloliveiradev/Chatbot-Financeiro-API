@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
 import os
+from src.infra.config import settings
+from src.adapters.llm.base import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +20,13 @@ _TOOL_TO_INTENT = {
     "listar_objetivos": "listar_objetivos",
     "definir_meta_mensal": "definir_meta_mensal",
     "obter_resumo_mensal": "obter_resumo_mensal",
+    "simular_compra": "simular_compra",
+    "gerar_relatorio": "gerar_relatorio",
     "responder_conversa": "conversa",
 }
 
 
-class GeminiClient:
+class GeminiLLMClient(LLMClient):
     def __init__(self, prompt_builder=None, tools=None):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -31,7 +35,7 @@ class GeminiClient:
 
         self.client = genai.Client(api_key=api_key)
         self.prompt_builder = prompt_builder
-        self.model_name = "gemini-2.5-flash-lite"
+        self.model_name = settings.gemini_model
 
         if tools:
             self.tools = [
@@ -74,7 +78,7 @@ class GeminiClient:
         # Se for responder_conversa, o reply_text vem dos argumentos
         reply_text = args.get("reply_text", "") if intent == "conversa" else ""
 
-        logger.info(f"[GEMINI] Function call: {name}({args}) -> intent: {intent}")
+        logger.info(f"[LLM-GEMINI] Function call: {name}({args}) -> intent: {intent}")
 
         result = {
             "intent": intent,
@@ -84,7 +88,7 @@ class GeminiClient:
 
         return json.dumps(result, ensure_ascii=False)
 
-    async def analyze_message(self, prompt: str, history: List[Dict[str, str]] = None) -> str:
+    async def analyze_message(self, system_prompt: str, user_message: str, history: List[Dict[str, str]] = None) -> str:
         """
         Analisa a mensagem do usuário usando o Gemini.
         Retorna SEMPRE uma string JSON válida para o process_message.
@@ -93,16 +97,18 @@ class GeminiClient:
             config = types.GenerateContentConfig(
                 safety_settings=self.safety_settings,
                 tools=self.tools,
+                system_instruction=system_prompt,
             )
 
+            # O Gemini recebe a user_message como conteúdo principal
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=prompt,
+                contents=user_message,
                 config=config,
             )
 
             # Log para debug (útil se o JSON falhar)
-            logger.debug(f"[GEMINI] Raw Response: {response}")
+            logger.debug(f"[LLM-GEMINI] Raw Response: {response}")
 
             # 1) Verificar se veio function_call
             if response.candidates:

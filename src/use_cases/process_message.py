@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Dict, Any, Optional, List
 from uuid import UUID, uuid4
 
-from src.adapters.llm.gemini_client import GeminiClient
+from src.adapters.llm.base import LLMClient
 from src.adapters.llm.prompt_builder import PromptBuilder
 from src.adapters.messaging.evolution_client import EvolutionClient
 from src.domain.repositories.client_repository import ClientRepository
@@ -35,7 +35,7 @@ class ProcessMessage:
         client_repo: ClientRepository,
         goal_repo: GoalRepository,
         spending_repo: SpendingRepository,
-        gemini_client: GeminiClient,
+        llm_client: LLMClient,
         evolution_client: EvolutionClient,
         prompt_builder: PromptBuilder,
         contribution_repo: ContributionRepository,
@@ -45,7 +45,7 @@ class ProcessMessage:
         self.goal_repo = goal_repo
         self.spending_repo = spending_repo
         self.contribution_repo = contribution_repo
-        self.gemini_client = gemini_client
+        self.llm_client = llm_client
         self.evolution_client = evolution_client
         self.prompt_builder = prompt_builder
         self.alerter = ProactiveAlerter(spending_repo, evolution_client)
@@ -80,7 +80,8 @@ class ProcessMessage:
             try:
                 audio_bytes = await self.evolution_client.download_media(media_url)
                 if audio_bytes:
-                    transcription = await self.gemini_client.transcribe_audio(audio_bytes, "audio/mp4")
+                    # WhatsApp usa OGG/Opus. Passamos audio/ogg para Groq ser mais preciso.
+                    transcription = await self.llm_client.transcribe_audio(audio_bytes, "audio/ogg")
                     if transcription:
                         text = transcription
                         logger.info(f"[PROCESS] Transcrição: {text}")
@@ -123,11 +124,14 @@ class ProcessMessage:
         full_prompt = f"{system_prompt}\n\nMENSAGEM DO USUÁRIO: {text}"
 
         try:
-            # Correção: O gemini_client.analyze_message retorna JSON string
-            raw_result = await self.gemini_client.analyze_message(full_prompt)
+            # Passamos instruções (system) e mensagem (user) separadamente para melhor aderência do Groq
+            raw_result = await self.llm_client.analyze_message(
+                system_prompt=system_prompt,
+                user_message=text
+            )
             result = json.loads(raw_result)
         except Exception as e:
-            logger.error(f"Erro ao processar com Gemini: {e}")
+            logger.error(f"Erro ao processar mensagem com LLM: {e}")
             await self.evolution_client.send_text_message(phone, "Estou com uma instabilidade. Pode repetir? 😅")
             return
 
@@ -337,7 +341,7 @@ class ProcessMessage:
             msg += f"• *{s['category']}*: {perc:.1f}% (R$ {float(s['total_spent']):,.2f})\n"
         
         try:
-            ai_res = await self.gemini_client.generate_response(f"Dê um insight sobre: {summary}")
+            ai_res = await self.llm_client.generate_response(f"Dê um insight sobre: {summary}")
             insight = ai_res.get('reply_text', '')
             if insight:
                 msg += f"\n🧠 *AI Insight:* {insight}"
@@ -350,7 +354,7 @@ class ProcessMessage:
         await self.evolution_client.send_presence(phone, "recording", 3000) # Simula 'processando'
         
         try:
-            ai_res = await self.gemini_client.generate_response(f"Análise profunda para {client_name}: {summary}")
+            ai_res = await self.llm_client.generate_response(f"Análise profunda para {client_name}: {summary}")
             insight = ai_res.get("reply_text", "Seu desempenho foi sólido.")
             
             pdf_path = await self.report_generator.generate_monthly_report(client_name, date.today(), summary, goals, insight)

@@ -1,13 +1,16 @@
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.infra.database.session import get_db_session
 from src.adapters.cache.redis_session import RedisSession
-from src.adapters.llm.gemini_client import GeminiClient
 from src.adapters.llm.prompt_builder import PromptBuilder
 from src.adapters.messaging.evolution_client import EvolutionClient
 from src.adapters.messaging.webhook_parser import WebhookParser
+from src.adapters.llm.base import LLMClient
+from src.adapters.llm.gemini_client import GeminiLLMClient
+from src.adapters.llm.groq_client import GroqLLMClient
+from src.infra.config import settings
 
 from src.domain.repositories.client_repository import ClientRepository
 from src.domain.repositories.goal_repository import GoalRepository
@@ -46,8 +49,10 @@ def get_redis_session() -> RedisSession:
 def get_prompt_builder() -> PromptBuilder:
     return PromptBuilder()
 
-def get_gemini_client(prompt_builder: PromptBuilder = Depends(get_prompt_builder)) -> GeminiClient:
-    return GeminiClient(prompt_builder, tools=FINANCIAL_TOOLS)
+def get_llm_client(prompt_builder: PromptBuilder = Depends(get_prompt_builder)) -> LLMClient:
+    if settings.llm_provider == "groq":
+        return GroqLLMClient(prompt_builder, tools=FINANCIAL_TOOLS)
+    return GeminiLLMClient(prompt_builder, tools=FINANCIAL_TOOLS)
 
 def get_evolution_client() -> EvolutionClient:
     return EvolutionClient()

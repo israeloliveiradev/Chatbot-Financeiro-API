@@ -10,7 +10,7 @@ from src.domain.entities.client import Client
 @pytest.mark.asyncio
 async def test_process_conversa(
     mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-    mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
 ):
     # Setup
     phone = "5511999999999"
@@ -30,7 +30,7 @@ async def test_process_conversa(
 
         use_case = ProcessMessage(
             mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-            mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+            mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
         )
 
         await use_case.execute(phone, "Oi")
@@ -41,14 +41,14 @@ async def test_process_conversa(
 @pytest.mark.asyncio
 async def test_process_registrar_gasto(
     mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-    mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
 ):
     phone = "5511999999999"
     client = Client(id=uuid4(), phone=phone, name="Test User", monthly_income=Decimal("5000"))
     mock_client_repo.get_by_phone.return_value = client
     
     # Mock Gemini returning registrar_gasto
-    mock_gemini_client.analyze_message.return_value = json.dumps({
+    mock_llm_client.analyze_message.return_value = json.dumps({
         "intent": "registrar_gasto",
         "extracted_data": {"category_name": "Alimentação", "amount": 50, "description": "Almoço"},
         "reply_text": "Gasto registrado!"
@@ -59,7 +59,7 @@ async def test_process_registrar_gasto(
     
     use_case = ProcessMessage(
         mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-        mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+        mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
     )
 
     with patch.object(use_case.alerter, "check_spending_alerts") as mock_alert_call:
@@ -73,13 +73,13 @@ async def test_process_registrar_gasto(
 @pytest.mark.asyncio
 async def test_process_criar_objetivo(
     mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-    mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
 ):
     phone = "5511999999999"
     client = Client(id=uuid4(), phone=phone, name="Test User", monthly_income=Decimal("5000"))
     mock_client_repo.get_by_phone.return_value = client
     
-    mock_gemini_client.analyze_message.return_value = json.dumps({
+    mock_llm_client.analyze_message.return_value = json.dumps({
         "intent": "criar_objetivo",
         "extracted_data": {"title": "Carro Novo", "target_amount": 50000, "deadline": "2026-12-31"},
         "reply_text": "Objetivo em processamento..."
@@ -87,7 +87,7 @@ async def test_process_criar_objetivo(
 
     use_case = ProcessMessage(
         mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-        mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+        mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
     )
 
     await use_case.execute(phone, "Quero economizar 50k para um carro")
@@ -99,13 +99,13 @@ async def test_process_criar_objetivo(
 @pytest.mark.asyncio
 async def test_process_listar_objetivos(
     mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-    mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
 ):
     phone = "5511999999999"
     client = Client(id=uuid4(), phone=phone, name="Test User", monthly_income=Decimal("5000"))
     mock_client_repo.get_by_phone.return_value = client
     
-    mock_gemini_client.analyze_message.return_value = json.dumps({
+    mock_llm_client.analyze_message.return_value = json.dumps({
         "intent": "listar_objetivos",
         "extracted_data": {},
         "reply_text": ""
@@ -119,7 +119,7 @@ async def test_process_listar_objetivos(
 
         use_case = ProcessMessage(
             mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-            mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+            mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
         )
 
         await use_case.execute(phone, "Quais meus objetivos?")
@@ -132,14 +132,14 @@ async def test_process_listar_objetivos(
 @pytest.mark.asyncio
 async def test_process_simular_compra(
     mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-    mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
 ):
     phone = "5511999999999"
     client = Client(id=uuid4(), phone=phone, name="Test User", monthly_income=Decimal("5000"))
     mock_client_repo.get_by_phone.return_value = client
     
     # Simulação: item de 1000, disponível 2000
-    mock_gemini_client.analyze_message.return_value = json.dumps({
+    mock_llm_client.analyze_message.return_value = json.dumps({
         "intent": "simular_compra",
         "extracted_data": {"item": "Fone", "amount": 1000},
         "reply_text": "Analisando..."
@@ -152,7 +152,7 @@ async def test_process_simular_compra(
 
         use_case = ProcessMessage(
             mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
-            mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+            mock_llm_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
         )
 
         await use_case.execute(phone, "Posso comprar um fone de 1000?")

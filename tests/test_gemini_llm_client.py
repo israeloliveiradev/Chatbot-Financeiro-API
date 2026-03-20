@@ -1,15 +1,17 @@
 import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.adapters.llm.gemini_client import GeminiClient
+from src.adapters.llm.gemini_client import GeminiLLMClient
 
 @pytest.mark.asyncio
 async def test_gemini_analyze_message_success():
     mock_prompt_builder = MagicMock()
-    client = GeminiClient(mock_prompt_builder)
+    client = GeminiLLMClient(mock_prompt_builder)
     
     # Mock do objeto retornado pelo SDK do Google
     mock_response = MagicMock()
+    # No GeminiLLMClient novo, a resposta vem deCandidates/parts ou .text
+    mock_response.candidates = []
     mock_response.text = '{"intent": "conversa", "reply_text": "Olá"}'
     
     with patch.object(client.client.aio.models, "generate_content", new_callable=AsyncMock) as mock_gen:
@@ -23,7 +25,7 @@ async def test_gemini_analyze_message_success():
 @pytest.mark.asyncio
 async def test_gemini_generate_response():
     mock_prompt_builder = MagicMock()
-    client = GeminiClient(mock_prompt_builder)
+    client = GeminiLLMClient(mock_prompt_builder)
     
     mock_response = MagicMock()
     mock_response.text = "Insight da IA"

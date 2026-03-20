@@ -60,6 +60,20 @@ def cancelar_objetivo(goal_title: str):
     """
     pass
 
+def simular_compra(item: str, amount: float):
+    """
+    Simula se uma compra cabe no orçamento mensal do cliente.
+    :param item: Nome do item que deseja comprar.
+    :param amount: Valor do item.
+    """
+    pass
+
+def gerar_relatorio():
+    """
+    Gera um relatório PDF completo com o balanço financeiro e insights da IA.
+    """
+    pass
+
 def responder_conversa(reply_text: str):
     """
     Responde mensagens gerais, saudações, dúvidas ou qualquer interação que não exija uma das outras ferramentas.
@@ -77,5 +91,7 @@ FINANCIAL_TOOLS = [
     registrar_aporte,
     simular_poupanca,
     cancelar_objetivo,
+    simular_compra,
+    gerar_relatorio,
     responder_conversa
 ]

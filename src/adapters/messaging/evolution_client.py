@@ -2,14 +2,15 @@ import logging
 import httpx
 import os
 from typing import Optional
+from src.infra.config import settings
 
 logger = logging.getLogger(__name__)
 
 class EvolutionClient:
     def __init__(self):
-        self.base_url = os.getenv("EVOLUTION_BASE_URL", "http://evolution:8080")
-        self.api_key = os.getenv("EVOLUTION_API_KEY")
-        self.instance = os.getenv("EVOLUTION_INSTANCE", "MainInstance")
+        self.base_url = settings.evolution_server_url
+        self.api_key = settings.evolution_api_key
+        self.instance = settings.evolution_instance
         
         if not self.api_key:
             logger.error("EVOLUTION_API_KEY não configurada")
@@ -132,12 +133,12 @@ class EvolutionClient:
         """
         Recupera a transcrição do áudio. 
         Nota: Se a Evolution API tiver transcrição nativa ativa, usamos ela.
-        Caso contrário, baixamos e poderíamos usar Gemini (implementado no GeminiClient).
+        Caso contrário, baixamos e poderíamos usar um provedor de LLM configurado.
         """
         # Por enquanto, tentamos buscar o campo 'transcription' se vier no media_url (se for um objeto complexo do webhook)
         # Mas como media_url é uma string, assumimos que ProcessMessage cuidará da lógica se retornarmos None ou delegamos.
         # Simplificação: O Evolution v2 já transcreve se configurado.
-        return None # Delegar para o GeminiClient no use case se necessário.
+        return None # Delegar para o LLM configurado no use case se necessário.
 
     async def download_media(self, media_url: str) -> Optional[bytes]:
         """
