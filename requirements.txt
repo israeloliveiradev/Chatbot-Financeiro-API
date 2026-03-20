@@ -16,3 +16,5 @@ python-dateutil>=2.8.2
 tenacity>=8.2.3
 python-json-logger>=2.0.7
 pytest-mock>=3.12.0
+fpdf2>=2.7.8
+matplotlib>=3.8.2

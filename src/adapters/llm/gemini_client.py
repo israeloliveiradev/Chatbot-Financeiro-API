@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # Mapeamento tool name → intent do process_message
 _TOOL_TO_INTENT = {
     "criar_objetivo": "criar_objetivo",
-    "registrar_gasto": "simular_compra",
+    "registrar_gasto": "registrar_gasto",
     "registrar_aporte": "registrar_aporte",
     "simular_poupanca": "simular_poupanca",
     "cancelar_objetivo": "cancelar_objetivo",
@@ -157,3 +157,19 @@ class GeminiClient:
         except Exception as e:
             logger.error(f"Erro na transcrição de áudio: {e}")
             return ""
+
+    async def generate_response(self, prompt: str) -> Dict[str, Any]:
+        """
+        Gera uma resposta de texto livre (para insights do relatório, etc).
+        Retorna no formato {'reply_text': '...'} para consistência.
+        """
+        try:
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(safety_settings=self.safety_settings)
+            )
+            return {"reply_text": response.text or ""}
+        except Exception as e:
+            logger.error(f"Erro em generate_response: {e}")
+            return {"reply_text": ""}

@@ -67,13 +67,14 @@ async def background_process_message(
             prompt_builder=prompt_builder
         )
 
-        await use_case.execute(
-            phone=phone,
-            text=text,
-            message_id=message_id,
-            is_audio=is_audio,
-            media_url=media_url
-        )
+        async with uow:
+            await use_case.execute(
+                phone=phone,
+                text=text,
+                message_id=message_id,
+                is_audio=is_audio,
+                media_url=media_url
+            )
 
 
 @router.post("/evolution")
