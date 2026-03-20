@@ -1,0 +1,111 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pytest.ini (WARNING: ignoring pytest config in pyproject.toml!)
+plugins: asyncio-1.3.0, mock-3.15.1, anyio-4.12.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 5 items / 4 deselected / 1 selected
+
+tests/test_process_message.py::test_process_simular_compra FAILED        [100%]
+
+=================================== FAILURES ===================================
+_________________________ test_process_simular_compra __________________________
+
+mock_uow = <MagicMock id='140440324201936'>
+mock_client_repo = <AsyncMock id='140440325809040'>
+mock_goal_repo = <AsyncMock id='140440320311184'>
+mock_spending_repo = <AsyncMock id='140440320365520'>
+mock_gemini_client = <AsyncMock id='140440323672016'>
+mock_evolution_client = <AsyncMock id='140440321463440'>
+mock_prompt_builder = <MagicMock id='140440320420688'>
+mock_contribution_repo = <AsyncMock id='140440323672272'>
+
+    @pytest.mark.asyncio
+    async def test_process_simular_compra(
+        mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
+        mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+    ):
+        phone = "5511999999999"
+        client = Client(id=uuid4(), phone=phone, name="Test User", monthly_income=Decimal("5000"))
+        mock_client_repo.get_by_phone.return_value = client
+    
+        # Simulação: item de 1000, disponível 2000
+        mock_gemini_client.analyze_message.return_value = json.dumps({
+            "intent": "simular_compra",
+            "extracted_data": {"item": "Fone", "amount": 1000},
+            "reply_text": "Analisando..."
+        })
+    
+        summary = [{"limit_amount": 5000, "total_spent": 3000}] # Disponível 2000
+    
+        with patch("src.use_cases.process_message.GetMonthlySpending") as MockGetMonthly:
+            MockGetMonthly.return_value.execute.return_value = summary
+    
+            use_case = ProcessMessage(
+                mock_uow, mock_client_repo, mock_goal_repo, mock_spending_repo,
+                mock_gemini_client, mock_evolution_client, mock_prompt_builder, mock_contribution_repo
+            )
+    
+>           await use_case.execute(phone, "Posso comprar um fone de 1000?")
+
+tests/test_process_message.py:153: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.use_cases.process_message.ProcessMessage object at 0x7fbacf6015d0>
+phone = '5511999999999', text = 'Posso comprar um fone de 1000?'
+message_id = None, is_audio = False, media_url = None
+
+    async def execute(
+        self,
+        phone: str,
+        text: str,
+        message_id: Optional[str] = None,
+        is_audio: bool = False,
+        media_url: Optional[str] = None,
+    ) -> None:
+        """
+        Orquestra o processamento de uma mensagem (texto ou áudio).
+        """
+        # 1. Transcrição se for áudio (Feature 7)
+        if is_audio and media_url:
+            await self.evolution_client.send_text_message(phone, "🎧 _Ouvindo seu áudio com atenção..._")
+            try:
+                audio_bytes = await self.evolution_client.download_media(media_url)
+                if audio_bytes:
+                    transcription = await self.gemini_client.transcribe_audio(audio_bytes, "audio/mp4")
+                    if transcription:
+                        text = transcription
+                        logger.info(f"[PROCESS] Transcrição: {text}")
+                    else:
+                        await self.evolution_client.send_text_message(phone, "Não consegui entender o áudio. Pode repetir?")
+                        return
+                else:
+                    await self.evolution_client.send_text_message(phone, "Tive um problema ao baixar seu áudio.")
+                    return
+            except Exception as e:
+                logger.error(f"Erro ao transcrever áudio: {e}")
+                await self.evolution_client.send_text_message(phone, "Erro ao processar áudio. Pode digitar?")
+                return
+    
+        # 2. Busca Cliente
+        get_client_use_case = GetClientByPhone(self.client_repo)
+        client = await get_client_use_case.execute(phone)
+    
+        if not client:
+            await self.evolution_client.send_text_message(
+                phone, "Olá! Sou o assistente do seu planejador financeiro. Peça a ele para cadastrar seu número para começarmos! 😊"
+            )
+            return
+    
+        # 3. Busca Contexto (Objetivos e Gastos)
+        goals = await GetGoals(self.goal_repo).execute(client.id, only_active=True)
+>       spendings_summary = await GetMonthlySpending(self.spending_repo).execute(
+            client.id, date.today()
+        )
+E       TypeError: object list can't be used in 'await' expression
+
+src/use_cases/process_message.py:97: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_process_message.py::test_process_simular_compra - TypeError...
+======================= 1 failed, 4 deselected in 3.44s ========================

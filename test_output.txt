@@ -1,0 +1,69 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0
+rootdir: /app
+configfile: pytest.ini (WARNING: ignoring pytest config in pyproject.toml!)
+plugins: asyncio-1.3.0, mock-3.15.1, anyio-4.12.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 25 items
+
+tests/test_cancel_goal.py F                                              [  4%]
+tests/test_create_goal.py F                                              [  8%]
+tests/test_gemini_client.py ..                                           [ 16%]
+tests/test_get_monthly_spending.py .                                     [ 20%]
+tests/test_process_message.py .....                                      [ 40%]
+tests/test_register_contribution.py F                                    [ 44%]
+tests/test_register_spending.py ..                                       [ 52%]
+tests/test_services.py ..                                                [ 60%]
+tests/test_smoke.py ..                                                   [ 68%]
+tests/test_smoke_remote.py F.                                            [ 76%]
+tests/test_summarize_history.py ..                                       [ 84%]
+tests/test_webhook_integration.py ..                                     [ 92%]
+tests/test_webhook_integration_remote.py FF                              [100%]
+
+=================================== FAILURES ===================================
+___________________________ test_cancel_goal_success ___________________________
+tests/test_cancel_goal.py:16: in test_cancel_goal_success
+    use_case = CancelGoal(mock_repo, mock_uow)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: CancelGoal.__init__() takes 2 positional arguments but 3 were given
+___________________________ test_create_goal_success ___________________________
+tests/test_create_goal.py:16: in test_create_goal_success
+    use_case = CreateGoal(mock_repo, mock_uow)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: CreateGoal.__init__() takes 2 positional arguments but 3 were given
+______________________ test_register_contribution_success ______________________
+tests/test_register_contribution.py:23: in test_register_contribution_success
+    await use_case.execute(goal_id, Decimal("50.00"))
+src/use_cases/register_contribution.py:33: in execute
+    if goal.current_amount >= goal.target_amount:
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: '>=' not supported between instances of 'MagicMock' and 'AsyncMock'
+______________________________ test_health_check _______________________________
+tests/test_smoke_remote.py:7: in test_health_check
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: AsyncClient.__init__() got an unexpected keyword argument 'app'
+________________________ test_evolution_webhook_queued _________________________
+tests/test_webhook_integration_remote.py:20: in test_evolution_webhook_queued
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: AsyncClient.__init__() got an unexpected keyword argument 'app'
+________________________ test_simulate_message_endpoint ________________________
+tests/test_webhook_integration_remote.py:34: in test_simulate_message_endpoint
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: AsyncClient.__init__() got an unexpected keyword argument 'app'
+=============================== warnings summary ===============================
+../usr/local/lib/python3.11/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /usr/local/lib/python3.11/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_cancel_goal.py::test_cancel_goal_success - TypeError: Cance...
+FAILED tests/test_create_goal.py::test_create_goal_success - TypeError: Creat...
+FAILED tests/test_register_contribution.py::test_register_contribution_success
+FAILED tests/test_smoke_remote.py::test_health_check - TypeError: AsyncClient...
+FAILED tests/test_webhook_integration_remote.py::test_evolution_webhook_queued
+FAILED tests/test_webhook_integration_remote.py::test_simulate_message_endpoint
+=================== 6 failed, 19 passed, 1 warning in 13.31s ===================
