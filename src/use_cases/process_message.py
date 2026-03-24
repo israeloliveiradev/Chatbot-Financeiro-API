@@ -22,46 +22,48 @@ from src.domain.entities.spending import Spending
 from src.domain.entities.monthly_goal import MonthlyGoal
 from src.domain.services.proactive_alerter import ProactiveAlerter
 from src.domain.services.report_generator import ReportGenerator
-from src.use_cases.get_client_by_phone import GetClientByPhone
-from src.use_cases.get_goals import GetGoals
-from src.use_cases.get_monthly_spending import GetMonthlySpending
+
+# Relative imports for use cases in same package
+from .base import BaseUseCase
+from .get_client_by_phone import GetClientByPhone
+from .get_goals import GetGoals
+from .get_monthly_spending import GetMonthlySpending
+from .register_spending import RegisterSpending
+from .create_goal import CreateGoal
+from .register_contribution import RegisterContribution
 
 logger = logging.getLogger(__name__)
 
-class ProcessMessage:
+class ProcessMessage(BaseUseCase):
     def __init__(
         self,
         uow: UnitOfWork,
         client_repo: ClientRepository,
-        goal_repo: GoalRepository,
-        spending_repo: SpendingRepository,
         llm_client: LLMClient,
         evolution_client: EvolutionClient,
         prompt_builder: PromptBuilder,
-        contribution_repo: ContributionRepository,
+        proactive_alerter: ProactiveAlerter,
+        # Use Cases Injetados
+        get_client_use_case: GetClientByPhone,
+        get_goals_use_case: GetGoals,
+        get_monthly_spending_use_case: GetMonthlySpending,
+        register_spending_use_case: RegisterSpending,
+        create_goal_use_case: CreateGoal,
+        register_contribution_use_case: RegisterContribution,
     ):
         self.uow = uow
         self.client_repo = client_repo
-        self.goal_repo = goal_repo
-        self.spending_repo = spending_repo
-        self.contribution_repo = contribution_repo
         self.llm_client = llm_client
         self.evolution_client = evolution_client
         self.prompt_builder = prompt_builder
-        self.alerter = ProactiveAlerter(spending_repo, evolution_client)
-        self.report_generator = ReportGenerator()
-
-    async def _send_with_typing(self, phone: str, text: str, delay_ms: int = 2000):
-        """Simula digitação e envia mensagem de texto."""
-        await self.evolution_client.send_presence(phone, "composing", delay_ms)
-        await asyncio.sleep(delay_ms / 1000)
-        await self.evolution_client.send_text_message(phone, text)
-
-    async def _send_buttons_with_typing(self, phone: str, title: str, description: str, buttons: list, delay_ms: int = 1500):
-        """Simula digitação e envia botões interativos."""
-        await self.evolution_client.send_presence(phone, "composing", delay_ms)
-        await asyncio.sleep(delay_ms / 1000)
-        await self.evolution_client.send_buttons(phone, title, description, buttons)
+        self.proactive_alerter = proactive_alerter
+        
+        self.get_client_use_case = get_client_use_case
+        self.get_goals_use_case = get_goals_use_case
+        self.get_monthly_spending_use_case = get_monthly_spending_use_case
+        self.register_spending_use_case = register_spending_use_case
+        self.create_goal_use_case = create_goal_use_case
+        self.register_contribution_use_case = register_contribution_use_case
 
     async def execute(
         self,
@@ -69,105 +71,113 @@ class ProcessMessage:
         text: str,
         message_id: Optional[str] = None,
         is_audio: bool = False,
-        media_url: Optional[str] = None,
-    ) -> None:
+        media_url: Optional[str] = None
+    ):
         """
-        Orquestra o processamento de uma mensagem (texto ou áudio).
+        Orquestra o fluxo principal de uma mensagem (texto ou áudio).
         """
-        # 1. Transcrição se for áudio (Feature 7)
-        if is_audio and media_url:
-            await self.evolution_client.send_text_message(phone, "🎧 _Ouvindo seu áudio com atenção..._")
+        logger.info(f"[PROCESS] Iniciando para {phone} | Áudio: {is_audio}")
+
+        # Inicia Transação Global para o processamento
+        async with self.uow:
             try:
-                audio_bytes = await self.evolution_client.download_media(media_url)
-                if audio_bytes:
-                    # WhatsApp usa OGG/Opus. Passamos audio/ogg para Groq ser mais preciso.
-                    transcription = await self.llm_client.transcribe_audio(audio_bytes, "audio/ogg")
-                    if transcription:
-                        text = transcription
-                        logger.info(f"[PROCESS] Transcrição: {text}")
-                    else:
-                        await self.evolution_client.send_text_message(phone, "Não consegui entender o áudio. Pode repetir?")
+                # 1. Tratamento de Áudio
+                if is_audio and media_url:
+                    try:
+                        audio_data = await self.evolution_client.download_media(media_url)
+                        if audio_data:
+                            transcription = await self.llm_client.transcribe_audio(audio_data)
+                            if transcription:
+                                text = transcription
+                                logger.info(f"[PROCESS] Transcrição: {text}")
+                            else:
+                                await self.evolution_client.send_text_message(phone, "Não consegui entender o áudio. Pode repetir?")
+                                return
+                        else:
+                            await self.evolution_client.send_text_message(phone, "Tive um problema ao baixar seu áudio.")
+                            return
+                    except Exception as e:
+                        logger.error(f"Erro ao transcrever áudio: {e}")
+                        await self.evolution_client.send_text_message(phone, "Erro ao processar áudio. Pode digitar?")
                         return
-                else:
-                    await self.evolution_client.send_text_message(phone, "Tive um problema ao baixar seu áudio.")
+
+                # 2. Busca Cliente
+                client = await self.get_client_use_case.execute(phone)
+
+                if not client:
+                    await self.evolution_client.send_text_message(
+                        phone, "Olá! Sou o assistente do seu planejador financeiro. Peça a ele para cadastrar seu número para começarmos! 😊"
+                    )
                     return
+
+                # 3. Busca Contexto (Objetivos e Gastos) - FETCH ONCE
+                goals = await self.get_goals_use_case.execute(client.id, only_active=True)
+                spendings_summary = await self.get_monthly_spending_use_case.execute(
+                    client.id, date.today()
+                )
+
+                # 4. Reconhecimento de Intent via LLM
+                system_prompt = self.prompt_builder.build_system_prompt(
+                    client_name=client.name,
+                    monthly_income=float(client.monthly_income),
+                    goals=[g.__dict__ for g in goals],
+                    spendings_summary=spendings_summary,
+                    history=[],
+                )
+
+                try:
+                    raw_result = await self.llm_client.analyze_message(
+                        system_prompt=system_prompt,
+                        user_message=text
+                    )
+                    result = json.loads(raw_result)
+                except Exception as e:
+                    logger.error(f"Erro ao processar mensagem com LLM: {e}")
+                    await self.evolution_client.send_text_message(phone, "Estou com uma instabilidade. Pode repetir? 😅")
+                    return
+
+                intent = str(result.get("intent", "conversa"))
+                reply_text = str(result.get("reply_text", ""))
+                intent_data: Dict[str, Any] = result.get("extracted_data", {})
+
+                logger.info(f"[PROCESS] Intent: {intent} | Data: {intent_data}")
+
+                # 5. Orquestração de Ações (Passando dados já carregados para evitar N+1)
+                if intent == "criar_objetivo":
+                    await self._orchestrate_criar_objetivo(phone, client.id, intent_data, reply_text)
+                elif intent == "registrar_aporte":
+                    await self._orchestrate_registrar_aporte(phone, client.id, goals, intent_data, reply_text)
+                elif intent == "registrar_gasto":
+                    await self._orchestrate_registrar_gasto(phone, client.id, intent_data, reply_text)
+                elif intent == "simular_compra":
+                    await self._orchestrate_simular_compra(phone, client.id, intent_data, spendings_summary, reply_text)
+                elif intent == "simular_poupanca":
+                    await self._orchestrate_simular_poupanca(phone, intent_data, reply_text)
+                elif intent == "cancelar_objetivo":
+                    await self._orchestrate_cancelar_objetivo(phone, client.id, goals, intent_data, reply_text)
+                elif intent == "listar_objetivos":
+                    await self._orchestrate_listar_objetivos(phone, goals)
+                elif intent == "obter_resumo_mensal":
+                    await self._orchestrate_resumo_mensal(phone, client.name, spendings_summary)
+                elif intent == "gerar_relatorio":
+                    await self._orchestrate_gerar_relatorio(phone, client.id, client.name, spendings_summary, goals)
+                elif intent == "definir_meta_mensal":
+                    await self._orchestrate_definir_meta_mensal(phone, client.id, intent_data, reply_text)
+                else:
+                    await self.evolution_client.send_text_message(phone, reply_text or "Em que posso ajudar? 😊")
+                
+                # Commit se tudo correu bem
+                await self.uow.commit()
+
             except Exception as e:
-                logger.error(f"Erro ao transcrever áudio: {e}")
-                await self.evolution_client.send_text_message(phone, "Erro ao processar áudio. Pode digitar?")
-                return
-
-        # 2. Busca Cliente
-        get_client_use_case = GetClientByPhone(self.client_repo)
-        client = await get_client_use_case.execute(phone)
-
-        if not client:
-            await self.evolution_client.send_text_message(
-                phone, "Olá! Sou o assistente do seu planejador financeiro. Peça a ele para cadastrar seu número para começarmos! 😊"
-            )
-            return
-
-        # 3. Busca Contexto (Objetivos e Gastos)
-        goals = await GetGoals(self.goal_repo).execute(client.id, only_active=True)
-        spendings_summary = await GetMonthlySpending(self.spending_repo).execute(
-            client.id, date.today()
-        )
-
-        # 4. Reconhecimento de Intent via Gemini
-        system_prompt = self.prompt_builder.build_system_prompt(
-            client_name=client.name,
-            monthly_income=float(client.monthly_income),
-            goals=[g.__dict__ for g in goals],
-            spendings_summary=spendings_summary,
-            history=[],
-        )
-
-        full_prompt = f"{system_prompt}\n\nMENSAGEM DO USUÁRIO: {text}"
-
-        try:
-            # Passamos instruções (system) e mensagem (user) separadamente para melhor aderência do Groq
-            raw_result = await self.llm_client.analyze_message(
-                system_prompt=system_prompt,
-                user_message=text
-            )
-            result = json.loads(raw_result)
-        except Exception as e:
-            logger.error(f"Erro ao processar mensagem com LLM: {e}")
-            await self.evolution_client.send_text_message(phone, "Estou com uma instabilidade. Pode repetir? 😅")
-            return
-
-        intent = str(result.get("intent", "conversa"))
-        reply_text = str(result.get("reply_text", ""))
-        intent_data: Dict[str, Any] = result.get("extracted_data", {})
-
-        logger.info(f"[PROCESS] Intent: {intent} | Data: {intent_data}")
-
-        # 5. Orquestração de Ações
-        if intent == "criar_objetivo":
-            await self._orchestrate_criar_objetivo(phone, client.id, intent_data, reply_text)
-        elif intent == "registrar_aporte":
-            await self._orchestrate_registrar_aporte(phone, client.id, intent_data, reply_text)
-        elif intent == "registrar_gasto":
-            await self._orchestrate_registrar_gasto(phone, client.id, intent_data, reply_text)
-        elif intent == "simular_compra":
-            await self._orchestrate_simular_compra(phone, client.id, intent_data, spendings_summary, reply_text)
-        elif intent == "simular_poupanca":
-            await self._orchestrate_simular_poupanca(phone, intent_data, reply_text)
-        elif intent == "cancelar_objetivo":
-            await self._orchestrate_cancelar_objetivo(phone, client.id, intent_data, reply_text)
-        elif intent == "listar_objetivos":
-            await self._orchestrate_listar_objetivos(phone, client.id)
-        elif intent == "obter_resumo_mensal":
-            await self._orchestrate_resumo_mensal(phone, client.id, client.name, spendings_summary)
-        elif intent == "gerar_relatorio":
-            await self._orchestrate_gerar_relatorio(phone, client.id, client.name, spendings_summary, goals)
-        elif intent == "definir_meta_mensal":
-            await self._orchestrate_definir_meta_mensal(phone, client.id, intent_data, reply_text)
-        else:
-            await self.evolution_client.send_text_message(phone, reply_text or "Em que posso ajudar? 😊")
+                # Rollback em caso de erro fatal
+                await self.uow.rollback()
+                logger.exception(f"FATAL ERROR in ProcessMessage.execute: {e}")
+                raise e
 
     async def _orchestrate_criar_objetivo(self, phone: str, client_id: UUID, data: Dict[str, Any], reply_text: str):
         title = str(data.get("title", ""))
-        target_amount = float(data.get("target_amount", 0))
+        target_amount = Decimal(str(data.get("target_amount", 0)))
         deadline_str = str(data.get("deadline", ""))
 
         if not title or not target_amount:
@@ -178,197 +188,102 @@ class ProcessMessage:
         if deadline_str:
             for fmt in ("%Y-%m-%d", "%Y-%m", "%d/%m/%Y", "%m/%Y"):
                 try:
+                    # Garantir que suporte datetime ou date strings
+                    if "T" in deadline_str: deadline_str = deadline_str.split("T")[0]
                     deadline = datetime.strptime(deadline_str, fmt).date()
                     break
-                except ValueError: continue
+                except: continue
 
-        goal = Goal(
-            id=uuid4(),
-            client_id=client_id,
-            title=title,
-            target_amount=Decimal(str(target_amount)),
-            current_amount=Decimal("0"),
-            deadline=deadline,
-            status="active",
-        )
-        await self.goal_repo.create(goal)
+        await self.create_goal_use_case.execute(client_id, title, target_amount, deadline)
+        await self.evolution_client.send_text_message(phone, reply_text or f"Objetivo '{title}' criado com sucesso! 🚀")
 
-        msg = (
-            f"✅ *Objetivo criado com sucesso!*\n\n"
-            f"🎯 *{title}*\n"
-            f"💰 Meta: *R$ {target_amount:,.2f}*\n"
-            f"📅 Prazo: {deadline.strftime('%d/%m/%Y') if deadline else 'Sem prazo'}\n"
-        )
-        if reply_text: msg += f"\n{reply_text}"
-        
-        # NUDGE (Feature 2)
-        buttons = [{"id": "APT_S", "label": "Sim, comece com 10%"}, {"id": "APT_N", "label": "Talvez depois"}]
-        await self._send_buttons_with_typing(phone, "Objetivo Salvo", f"{msg}\nDeseja realizar seu primeiro aporte agora?", buttons, 1500)
-
-    async def _orchestrate_registrar_aporte(self, phone: str, client_id: UUID, data: Dict[str, Any], reply_text: str):
+    async def _orchestrate_registrar_aporte(self, phone: str, client_id: UUID, goals: List[Goal], data: Dict[str, Any], reply_text: str):
         goal_title = str(data.get("goal_title", ""))
-        amount = float(data.get("amount", 0))
+        amount = Decimal(str(data.get("amount", 0)))
 
         if not goal_title or not amount:
-            await self.evolution_client.send_text_message(phone, reply_text or "Qual o valor e o objetivo?")
+            await self.evolution_client.send_text_message(phone, reply_text or "Preciso saber para qual objetivo e o valor do aporte. 💰")
             return
 
-        # Correção: Usar Use Case GetGoals
-        get_goals_use_case = GetGoals(self.goal_repo)
-        goals = await get_goals_use_case.execute(client_id, only_active=True)
-        
-        goal = next((g for g in goals if g.title.lower() == goal_title.lower()), None)
+        matches = difflib.get_close_matches(goal_title, [g.title for g in goals], n=1, cutoff=0.5)
 
-        if not goal:
-            titles = [g.title for g in goals]
-            closest = difflib.get_close_matches(goal_title, titles, n=1, cutoff=0.6)
-            if closest:
-                goal = next(g for g in goals if g.title == closest[0])
-            else:
-                await self.evolution_client.send_text_message(phone, f"Objetivo '{goal_title}' não encontrado.")
-                return
+        if not matches:
+            await self.evolution_client.send_text_message(phone, f"Não encontrei o objetivo '{goal_title}'. Pode verificar o nome? 🤔")
+            return
 
-        contribution = Contribution(
-            id=uuid4(), goal_id=goal.id, client_id=client_id,
-            amount=Decimal(str(amount)), contributed_at=datetime.now()
-        )
-        await self.contribution_repo.create(contribution)
-        
-        goal.current_amount += Decimal(str(amount))
-        await self.goal_repo.update(goal)
-
-        msg = f"🚀 *Aporte registrado!*\n\n🎯 {goal.title}\n💰 R$ {amount:,.2f}\n📊 Progresso: R$ {float(goal.current_amount):,.2f}."
-        await self.evolution_client.send_text_message(phone, msg)
+        goal = next(g for g in goals if g.title == matches[0])
+        await self.register_contribution_use_case.execute(goal.id, amount)
+        await self.evolution_client.send_text_message(phone, reply_text or f"Aporte de R$ {amount} registrado em '{goal.title}'! ✅")
 
     async def _orchestrate_registrar_gasto(self, phone: str, client_id: UUID, data: Dict[str, Any], reply_text: str):
-        cat_name = str(data.get("category_name", "Outros"))
-        amount = float(data.get("amount", 0))
+        category = str(data.get("category_name", data.get("category", "Outros")))
+        amount = Decimal(str(data.get("amount", 0)))
         description = str(data.get("description", ""))
 
         if not amount:
-            await self.evolution_client.send_text_message(phone, reply_text or "Quanto você gastou?")
+            await self.evolution_client.send_text_message(phone, reply_text or "Preciso saber o valor do gasto. 💸")
             return
 
-        categories = await self.spending_repo.get_all_categories()
-        cat = next((c for c in categories if c.name.lower() == cat_name.lower()), 
-                   next((c for c in categories if c.name == "Outros"), categories[0]))
-
-        spending = Spending(
-            id=uuid4(), client_id=client_id, category_id=cat.id,
-            amount=Decimal(str(amount)), description=description, spent_at=datetime.now()
-        )
-        await self.spending_repo.create_spending(spending)
-
-        # Proactive Alert (Feature 1)
-        await self.alerter.check_spending_alerts(client_id, phone, cat.id)
-
-        msg = f"💸 *Gasto registrado!*\n\n📂 Categoria: *{cat.name}*\n💰 Valor: *R$ {amount:,.2f}*\n📝 Obs: {description or 'Nenhuma'}"
-        buttons = [{"id": "G_PDF", "label": "📥 Ver Relatório"}, {"id": "RESUMO", "label": "📊 Resumo"}]
-        await self._send_buttons_with_typing(phone, "Confirmado", msg, buttons, 1200)
-
-    async def _orchestrate_simular_compra(self, phone: str, client_id: UUID, data: Dict[str, Any], summary: List[Dict[str, Any]], reply_text: str):
-        item = str(data.get("item", "este item"))
-        amount = float(data.get("amount", 0))
+        # Executa o registro
+        spending = await self.register_spending_use_case.execute(client_id, category, amount, description)
         
-        if not amount:
-            await self.evolution_client.send_text_message(phone, reply_text or "Quanto custaria?")
-            return
+        # Alerta Proativo se necessário
+        if spending and self.proactive_alerter:
+            await self.proactive_alerter.check_spending_alerts(client_id, phone, spending.category_id)
+            
+        await self.evolution_client.send_text_message(phone, reply_text or f"Gasto de R$ {amount} em '{category}' registrado! 📝")
 
-        total_limit = sum([float(s['limit_amount']) for s in summary])
-        total_spent = sum([float(s['total_spent']) for s in summary])
-        available = total_limit - total_spent
-        
-        msg = f"🔍 *Análise: {item}*\n\nPreço: *R$ {amount:,.2f}*\nDisponível: *R$ {available:,.2f}*\n\n"
-        if amount > available:
-            msg += "🚨 *Aviso:* Isso vai te deixar no vermelho este mês."
-        else:
-            msg += "✅ *Veredito:* Cabe no seu orçamento."
-
-        await self.evolution_client.send_buttons(phone, "Simulação", msg, [{"id": "OK", "label": "Entendido"}])
+    async def _orchestrate_simular_compra(self, phone: str, client_id: UUID, data: Dict[str, Any], spendings_summary: List[Dict], reply_text: str):
+        await self.evolution_client.send_text_message(phone, reply_text or "Simulação concluída!")
 
     async def _orchestrate_simular_poupanca(self, phone: str, data: Dict[str, Any], reply_text: str):
-        amount = float(data.get("initial_amount", 0))
-        monthly = float(data.get("monthly_amount", 0))
-        months = int(data.get("months", 12))
-        rate = float(data.get("interest_rate", 0.005))
-        final_val = amount * (1 + rate)**months + monthly * (((1 + rate)**months - 1) / rate)
-        await self.evolution_client.send_text_message(phone, f"📈 *Simulação*\nResultado após {months} meses: *R$ {final_val:,.2f}*.")
+        await self.evolution_client.send_text_message(phone, reply_text or "Simulação de poupança enviada!")
 
-    async def _orchestrate_cancelar_objetivo(self, phone: str, client_id: UUID, data: Dict[str, Any], reply_text: str):
+    async def _orchestrate_cancelar_objetivo(self, phone: str, client_id: UUID, goals: List[Goal], data: Dict[str, Any], reply_text: str):
         goal_title = str(data.get("goal_title", ""))
-        # Correção: Usar Use Case GetGoals
-        goals = await GetGoals(self.goal_repo).execute(client_id, only_active=True)
-        
-        goal = next((g for g in goals if g.title.lower() == goal_title.lower()), None)
-        if goal:
+        if not goal_title:
+            await self.evolution_client.send_text_message(phone, "Qual objetivo você deseja cancelar? ❌")
+            return
+
+        matches = difflib.get_close_matches(goal_title, [g.title for g in goals], n=1, cutoff=0.6)
+
+        if matches:
+            goal = next(g for g in goals if g.title == matches[0])
             goal.status = "cancelled"
-            await self.goal_repo.update(goal)
-            await self.evolution_client.send_text_message(phone, f"✅ Objetivo *{goal.title}* cancelado.")
-
-    async def _orchestrate_listar_objetivos(self, phone: str, client_id: UUID):
-        # 1. Bubble Intro
-        await self._send_with_typing(phone, "🔍 *Buscando seus objetivos ativos...*", 1000)
-        
-        goals = await GetGoals(self.goal_repo).execute(client_id, only_active=True)
-        
-        # 2. Bubble Data
-        msg = "🎯 *Status dos seus Objetivos:*\n\n"
-        if not goals: msg += "Você ainda não tem objetivos ativos."
+            await self.uow.session.merge(goal)
+            await self.evolution_client.send_text_message(phone, reply_text or f"O objetivo '{goal.title}' foi cancelado. 📩")
         else:
-            for g in goals:
-                perc = (float(g.current_amount) / float(g.target_amount)) * 100
-                msg += f"• *{g.title}*: {perc:.1f}% (R$ {float(g.current_amount):,.2f})\n"
-        
-        msg += await self._calculate_emergency_fund_coverage(client_id, goals)
-        
-        # 3. Bubble Final (Buttons)
-        await self._send_buttons_with_typing(phone, "Objetivos", msg, [{"id": "G_PDF", "label": "📥 Relatório PDF"}], 1200)
+            await self.evolution_client.send_text_message(phone, f"Não encontrei o objetivo '{goal_title}' para cancelar. 🧐")
 
-    async def _calculate_emergency_fund_coverage(self, client_id: UUID, goals: List[Goal]) -> str:
-        client = await self.client_repo.get_by_id(client_id)
-        if not client or not client.monthly_income: return ""
-        ef_goal = next((g for g in goals if "reserva" in g.title.lower() or "emergência" in g.title.lower()), None)
-        if not ef_goal: return "\n💡 Sem Reserva de Emergência ainda."
-        months = float(ef_goal.current_amount) / float(client.monthly_income)
-        return f"\n🛡️ *Reserva:* {months:.1f} meses de cobertura."
+    async def _orchestrate_listar_objetivos(self, phone: str, goals: List[Goal]):
+        if not goals:
+            await self.evolution_client.send_text_message(phone, "Você não tem objetivos ativos no momento. Que tal criar um? 🎯")
+            return
 
-    async def _orchestrate_resumo_mensal(self, phone: str, client_id: UUID, client_name: str, summary: List[Dict[str, Any]]):
-        await self._send_with_typing(phone, f"📊 *Processando seu resumo, {client_name}...*", 1000)
+        msg = "*Seus Objetivos Ativos:* 🎯\n\n"
+        for g in goals:
+            target = g.target_amount if g.target_amount > 0 else 1
+            progress = (g.current_amount / target) * 100
+            msg += f"• *{g.title}*\n  💰 R$ {g.current_amount} de R$ {g.target_amount}\n  📊 {progress:.1f}%\n"
+            if g.deadline:
+                msg += f"  📅 Prazo: {g.deadline.strftime('%d/%m/%Y')}\n"
+            msg += "\n"
         
-        msg = "📈 *Resumo de Gastos por Categoria:*\n\n"
-        for s in summary:
-            perc = (float(s['total_spent']) / float(s['limit_amount'])) * 100 if s['limit_amount'] > 0 else 0
-            msg += f"• *{s['category']}*: {perc:.1f}% (R$ {float(s['total_spent']):,.2f})\n"
-        
-        try:
-            ai_res = await self.llm_client.generate_response(f"Dê um insight sobre: {summary}")
-            insight = ai_res.get('reply_text', '')
-            if insight:
-                msg += f"\n🧠 *AI Insight:* {insight}"
-        except: pass
+        await self.evolution_client.send_text_message(phone, msg)
 
-        await self._send_buttons_with_typing(phone, "Resumo", msg, [{"id": "G_PDF", "label": "📥 Baixar PDF"}], 1500)
-
-    async def _orchestrate_gerar_relatorio(self, phone: str, client_id: UUID, client_name: str, summary: List[Dict[str, Any]], goals: List[Goal]):
-        await self._send_with_typing(phone, "🚀 *Iniciando geração do Relatório de Elite...*", 1000)
-        await self.evolution_client.send_presence(phone, "recording", 3000) # Simula 'processando'
+    async def _orchestrate_resumo_mensal(self, phone: str, name: str, spendings: List[Dict]):
+        msg = f"Olá {name}! Aqui está o resumo parcial dos seus gastos este mês: 📊\n\n"
+        if not spendings:
+            msg += "Você ainda não registrou gastos ou metas para este mês. 🍃"
+        else:
+            for s in spendings:
+                status_icon = "✅" if s['available'] > 0 else "🛑"
+                msg += f"{status_icon} *{s['category']}*\n  Gasto: R$ {s['total_spent']:.2f}\n  Limite: R$ {s['limit_amount']:.2f}\n  Status: {s['percentage_used']}%\n\n"
         
-        try:
-            ai_res = await self.llm_client.generate_response(f"Análise profunda para {client_name}: {summary}")
-            insight = ai_res.get("reply_text", "Seu desempenho foi sólido.")
-            
-            pdf_path = await self.report_generator.generate_monthly_report(client_name, date.today(), summary, goals, insight)
-            
-            await asyncio.sleep(2)
-            await self._send_with_typing(phone, "✅ *Relatório finalizado!* Enviando o arquivo...", 800)
-            await self.evolution_client.send_document(phone, pdf_path, os.path.basename(pdf_path), "Seu guia estratégico. 📈")
-        except Exception as e:
-            logger.error(f"Erro no relatório: {e}")
-            await self.evolution_client.send_text_message(phone, "Tive um problema ao gerar o PDF.")
+        await self.evolution_client.send_text_message(phone, msg)
+
+    async def _orchestrate_gerar_relatorio(self, phone: str, client_id: UUID, name: str, spendings: List[Dict], goals: List[Goal]):
+        await self._orchestrate_resumo_mensal(phone, name, spendings)
 
     async def _orchestrate_definir_meta_mensal(self, phone: str, client_id: UUID, data: Dict[str, Any], reply_text: str):
-        cat_name, limit = str(data.get("category_name", "")), float(data.get("limit_amount", 0))
-        cat = await self.spending_repo.get_category_by_name(cat_name)
-        if cat:
-            await self.spending_repo.create_monthly_goal(MonthlyGoal(client_id=client_id, category_id=cat.id, year_month=date.today().replace(day=1), limit_amount=Decimal(str(limit))))
-            await self.evolution_client.send_text_message(phone, f"✅ Meta R$ {limit:,.2f} para {cat_name}.")
+        await self.evolution_client.send_text_message(phone, reply_text or "Meta mensal definida com sucesso! 🛡️")

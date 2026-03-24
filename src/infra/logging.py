@@ -7,6 +7,8 @@ from loguru import logger
 from rich.console import Console
 from rich.logging import RichHandler
 
+from src.infra.config import settings
+
 # Context variable to store the trace ID for the current request/task
 trace_id_var: ContextVar[str] = ContextVar("trace_id", default="n/a")
 
@@ -44,14 +46,26 @@ def setup_logging(level=logging.INFO):
     # Remove default loguru handler
     logger.remove()
 
-    # Add custom handler with rich for beautiful logs in console
+    # Add custom handler
+    # Em produção, usamos serialize=True para JSON estruturado
+    is_prod = settings.app_env != "development"
+    
+    # Define a custom record factory or a safer format
+    # Loguru records include 'extra'. We can use a filter to ensure trace_id exists.
+    def trace_id_filter(record):
+        if "trace_id" not in record["extra"]:
+            record["extra"]["trace_id"] = trace_id_var.get()
+        return True
+
     logger.add(
         sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level> [Trace: {extra[trace_id]}]",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message} [Trace: {extra[trace_id]}]" if not is_prod else None,
         level="INFO",
-        colorize=True,
+        serialize=is_prod,
+        colorize=not is_prod,
         backtrace=True,
         diagnose=True,
+        filter=trace_id_filter, # Ensure trace_id is always there
     )
 
     # Silence noisy loggers

@@ -6,18 +6,19 @@ from src.adapters.llm.gemini_client import GeminiLLMClient
 @pytest.mark.asyncio
 async def test_gemini_analyze_message_success():
     mock_prompt_builder = MagicMock()
-    client = GeminiLLMClient(mock_prompt_builder)
+    with patch("os.getenv", return_value="fake_key"):
+        client = GeminiLLMClient(mock_prompt_builder)
     
     # Mock do objeto retornado pelo SDK do Google
     mock_response = MagicMock()
-    # No GeminiLLMClient novo, a resposta vem deCandidates/parts ou .text
+    # No GeminiLLMClient novo, a resposta vem de Candidates/parts ou .text
     mock_response.candidates = []
     mock_response.text = '{"intent": "conversa", "reply_text": "Olá"}'
     
     with patch.object(client.client.aio.models, "generate_content", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = mock_response
         
-        result = await client.analyze_message("User prompt")
+        result = await client.analyze_message("system", "User prompt") # Updated to 2 args as per new analyze_message signature
         
         assert "conversa" in result
         mock_gen.assert_called_once()
@@ -25,7 +26,8 @@ async def test_gemini_analyze_message_success():
 @pytest.mark.asyncio
 async def test_gemini_generate_response():
     mock_prompt_builder = MagicMock()
-    client = GeminiLLMClient(mock_prompt_builder)
+    with patch("os.getenv", return_value="fake_key"):
+        client = GeminiLLMClient(mock_prompt_builder)
     
     mock_response = MagicMock()
     mock_response.text = "Insight da IA"

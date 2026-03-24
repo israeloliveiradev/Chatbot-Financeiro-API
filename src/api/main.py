@@ -17,16 +17,23 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Add Middleware
+# Add Middleware - Order is important (Outermost to Innermost)
+from src.api.middleware import TraceIDMiddleware, RequestLoggingMiddleware, RateLimitMiddleware
+
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(TraceIDMiddleware)
 
-# CORS configuration
+# CORS configuration - Restricted in Production
+# Em produção, você deve definir as origens permitidas via variável de ambiente
+origins = ["*"] if settings.app_env == "development" else [settings.evolution_server_url]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 from src.domain.exceptions import DomainException
@@ -66,12 +73,23 @@ from src.infra.database.session import engine
 from src.adapters.cache.redis_session import RedisSession
 
 @app.get("/health", tags=["Health"])
-async def health_check():
+async def health_check(request: Request):
+    """
+    Endpoint de saúde simplificado.
+    Detalhes só são exibidos em desenvolvimento ou com chave de API.
+    """
+    is_admin = request.headers.get("X-API-Key") == settings.internal_api_key
+    show_details = settings.app_env == "development" or is_admin
+
+    if not show_details:
+        return {"status": "online"}
+
     health = {
         "status": "online",
         "environment": settings.app_env,
         "database": "down",
-        "redis": "down"
+        "redis": "down",
+        "version": "1.0.0"
     }
     
     # Check DB
@@ -80,16 +98,15 @@ async def health_check():
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
             health["database"] = "up"
-    except Exception as e:
-        logger.error(f"Health Check DB Error: {e}")
+    except Exception:
+        pass
 
     # Check Redis
     try:
         redis_session = RedisSession()
-        # Redis PING
         await redis_session.redis.ping()
         health["redis"] = "up"
-    except Exception as e:
-        logger.error(f"Health Check Redis Error: {e}")
+    except Exception:
+        pass
 
     return health

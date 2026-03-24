@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
 from decimal import Decimal
 from datetime import date, datetime, timezone
 from uuid import UUID
@@ -219,3 +219,37 @@ async def create_monthly_goal(
             alert_100_sent=saved.alert_100_sent,
         ).model_dump(),
     )
+
+@router.get("/{phone}/monthly-goals", summary="Listar metas mensais", response_model=StandardResponse)
+async def list_monthly_goals(
+    phone: str,
+    year_month: Optional[str] = None, # Formato YYYY-MM
+    client_repo: ClientRepository = Depends(get_client_repository),
+    spending_repo: SpendingRepository = Depends(get_spending_repository),
+):
+    client = await _get_client_or_404(phone, client_repo)
+    
+    if year_month:
+        try:
+            parsed = datetime.strptime(year_month, "%Y-%m").date().replace(day=1)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="year_month deve ser YYYY-MM")
+    else:
+        parsed = date.today().replace(day=1)
+
+    goals = await spending_repo.get_monthly_goals_by_client_and_month(client.id, parsed)
+    categories = await spending_repo.get_all_categories()
+    cat_map = {c.id: c.name for c in categories}
+
+    data = [
+        MonthlyGoalResponse(
+            id=str(g.id),
+            category_name=cat_map.get(g.category_id, "Desconhecida"),
+            limit_amount=float(g.limit_amount),
+            year_month=g.year_month.strftime("%Y-%m"),
+            alert_80_sent=g.alert_80_sent,
+            alert_100_sent=g.alert_100_sent,
+        ).model_dump()
+        for g in goals
+    ]
+    return StandardResponse(data=data)

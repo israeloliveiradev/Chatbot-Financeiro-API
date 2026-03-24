@@ -5,8 +5,9 @@ from uuid import UUID
 from src.domain.entities.contribution import Contribution
 from src.domain.repositories.contribution_repository import ContributionRepository
 from src.domain.repositories.goal_repository import GoalRepository
+from src.use_cases.base import BaseUseCase
 
-class RegisterContribution:
+class RegisterContribution(BaseUseCase):
     def __init__(self, contribution_repo: ContributionRepository, goal_repo: GoalRepository):
         self.contribution_repo = contribution_repo
         self.goal_repo = goal_repo

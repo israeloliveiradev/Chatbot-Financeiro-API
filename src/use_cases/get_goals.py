@@ -2,8 +2,9 @@ from uuid import UUID
 
 from src.domain.entities.goal import Goal
 from src.domain.repositories.goal_repository import GoalRepository
+from src.use_cases.base import BaseUseCase
 
-class GetGoals:
+class GetGoals(BaseUseCase):
     def __init__(self, goal_repo: GoalRepository):
         self.goal_repo = goal_repo
 

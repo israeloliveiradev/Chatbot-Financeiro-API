@@ -38,6 +38,8 @@ class GeminiLLMClient(LLMClient):
         self.model_name = settings.gemini_model
 
         if tools:
+            # No SDK novo google-genai, podemos passar a lista de callables diretamente no config.tools
+            # Mas para usar types.Tool, precisamos de function_declarations.
             self.tools = [
                 types.Tool(function_declarations=[
                     types.FunctionDeclaration.from_callable(client=self.client, callable=fn)
@@ -108,7 +110,11 @@ class GeminiLLMClient(LLMClient):
             )
 
             # Log para debug (útil se o JSON falhar)
-            logger.debug(f"[LLM-GEMINI] Raw Response: {response}")
+            logger.info(f"[LLM-GEMINI] Raw Response Content: {response.text}")
+            if response.candidates and response.candidates[0].content.parts:
+                part = response.candidates[0].content.parts[0]
+                if part.function_call:
+                    logger.info(f"[LLM-GEMINI] Function Call detected: {part.function_call.name}")
 
             # 1) Verificar se veio function_call
             if response.candidates:

@@ -2,8 +2,9 @@ from typing import Optional
 
 from src.domain.entities.client import Client
 from src.domain.repositories.client_repository import ClientRepository
+from src.use_cases.base import BaseUseCase
 
-class GetClientByPhone:
+class GetClientByPhone(BaseUseCase):
     def __init__(self, client_repo: ClientRepository):
         self.client_repo = client_repo
 

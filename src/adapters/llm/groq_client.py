@@ -1,13 +1,14 @@
 import json
 import logging
 import httpx
+import inspect
 from typing import List, Dict, Any, Optional
 from src.infra.config import settings
 from src.adapters.llm.base import LLMClient
 
 logger = logging.getLogger(__name__)
 
-# Mapeamento tool name → intent do process_message (Igual ao Gemini)
+# Mapeamento tool name → intent do process_message
 _TOOL_TO_INTENT = {
     "criar_objetivo": "criar_objetivo",
     "registrar_gasto": "registrar_gasto",
@@ -29,37 +30,62 @@ class GroqLLMClient(LLMClient):
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
         self.transcribe_url = "https://api.groq.com/openai/v1/audio/transcriptions"
         self.prompt_builder = prompt_builder
-        self.tools_list = tools # Guardamos para o prompt
+        self.tools_list = tools
+        self._openai_tools = self._build_openai_tools()
 
-    def _get_system_prompt(self) -> str:
-        """Constrói o system prompt com as ferramentas disponíveis."""
-        tools_desc = ""
-        if self.tools_list:
-            for fn in self.tools_list:
-                tools_desc += f"- {fn.__name__}: {fn.__doc__.strip() if fn.__doc__ else ''}\n"
-
-        return f"""Você é um assistente financeiro inteligente e amigável.
-Sua tarefa é analisar a mensagem do usuário e decidir qual ferramenta usar ou se deve apenas responder à conversa.
-
-FERRAMENTAS DISPONÍVEIS:
-{tools_desc}
-
-REGRAS:
-1. Se a mensagem for um comando para uma ferramenta, extraia os dados necessários.
-2. Se for uma dúvida geral ou saudação, use a ferramenta 'responder_conversa'.
-3. Retorne SEMPRE um JSON válido no seguinte formato:
-{{
-  "intent": "nome_da_ferramenta",
-  "extracted_data": {{ "param1": "valor1", ... }},
-  "reply_text": "Mensagem amigável para o usuário (obrigatório apenas se intent for 'conversa')"
-}}
-
-Mapeamento de Intent:
-- responder_conversa -> intent: 'conversa'
-- registrar_gasto -> intent: 'registrar_gasto'
-- criar_objetivo -> intent: 'criar_objetivo'
-- (use o nome da função como intent, exceto para responder_conversa)
-"""
+    def _build_openai_tools(self) -> List[Dict[str, Any]]:
+        """Converte funções Python para JSON Schema (OpenAI Format)."""
+        if not self.tools_list:
+            return []
+            
+        openai_tools = []
+        for fn in self.tools_list:
+            # Extrair docstring para descrição
+            doc = fn.__doc__ or ""
+            desc = doc.split(":param")[0].strip()
+            
+            # Extrair parâmetros
+            sig = inspect.signature(fn)
+            properties = {}
+            required = []
+            
+            for name, param in sig.parameters.items():
+                # Mapeamento básico de tipos Python para JSON Schema
+                p_type = "string"
+                if param.annotation == float or "float" in str(param.annotation):
+                    p_type = "number"
+                elif param.annotation == int:
+                    p_type = "integer"
+                elif param.annotation == bool:
+                    p_type = "boolean"
+                
+                # Buscar descrição do parâmetro no docstring (simplificado)
+                p_desc = ""
+                for line in doc.split("\n"):
+                    if f":param {name}:" in line:
+                        p_desc = line.split(f":param {name}:")[1].strip()
+                
+                properties[name] = {
+                    "type": p_type,
+                    "description": p_desc
+                }
+                
+                if param.default == inspect.Parameter.empty:
+                    required.append(name)
+            
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": fn.__name__,
+                    "description": desc,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required
+                    }
+                }
+            })
+        return openai_tools
 
     async def analyze_message(self, system_prompt: str, user_message: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         headers = {
@@ -67,19 +93,17 @@ Mapeamento de Intent:
             "Content-Type": "application/json"
         }
         
-        # Injetamos as instruções técnicas de JSON no system prompt
-        full_system_prompt = f"{system_prompt}\n\n{self._get_system_instructions()}"
-
         messages = [
-            {"role": "system", "content": full_system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
         ]
         
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"}
+            "temperature": 0.0, # Zero para máxima previsibilidade em ferramentas
+            "tools": self._openai_tools,
+            "tool_choice": "auto"
         }
 
         async with httpx.AsyncClient() as client:
@@ -88,53 +112,54 @@ Mapeamento de Intent:
                 response.raise_for_status()
                 data = response.json()
                 
-                content = data["choices"][0]["message"]["content"]
-                result = json.loads(content)
+                message = data["choices"][0]["message"]
                 
-                # Normalização mínima
-                if "intent" not in result: result["intent"] = "conversa"
-                if "extracted_data" not in result: result["extracted_data"] = {}
-                if result["intent"] == "responder_conversa": result["intent"] = "conversa"
-
-                return json.dumps(result, ensure_ascii=False)
+                # Se o modelo chamou uma ferramenta
+                if message.get("tool_calls"):
+                    tool_call = message["tool_calls"][0]["function"]
+                    name = tool_call["name"]
+                    args = json.loads(tool_call["arguments"])
+                    
+                    intent = _TOOL_TO_INTENT.get(name, "conversa")
+                    
+                    # Se for responder_conversa, extraímos o reply_text
+                    reply_text = args.get("reply_text", "")
+                    
+                    result = {
+                        "intent": intent,
+                        "extracted_data": args,
+                        "reply_text": reply_text
+                    }
+                    logger.info(f"[LLM-GROQ] Tool Call: {name} | Args: {args}")
+                    return json.dumps(result, ensure_ascii=False)
+                
+                # Fallback: Se não chamou ferramenta, mas retornou texto
+                content = message.get("content", "")
+                logger.warning(f"[LLM-GROQ] Sem tool_call, conteúdo: {content}")
+                
+                return json.dumps({
+                    "intent": "conversa",
+                    "extracted_data": {},
+                    "reply_text": content or "Como posso ajudar? 😊"
+                }, ensure_ascii=False)
                 
             except Exception as e:
                 logger.error(f"[LLM-GROQ] Erro ao chamar Groq: {e}")
                 return json.dumps({
                     "intent": "conversa",
                     "extracted_data": {},
-                    "reply_text": "Desculpe, tive um problema ao processar via Groq. 😅"
+                    "reply_text": "Desculpe, tive um problema ao processar seu pedido. 😅"
                 }, ensure_ascii=False)
-        
-        return json.dumps({
-            "intent": "conversa",
-            "extracted_data": {},
-            "reply_text": "Erro inesperado ao processar mensagem. 😅"
-        }, ensure_ascii=False)
 
-    def _get_system_instructions(self) -> str:
-        """Instruções técnicas de formato para o Groq."""
-        return """
-Sua tarefa é analisar a mensagem do usuário e decidir qual ferramenta usar.
-Retorne SEMPRE um JSON válido no seguinte formato:
-{
-  "intent": "nome_da_ferramenta",
-  "extracted_data": { "param1": "valor1", ... },
-  "reply_text": "Mensagem amigável para o usuário (obrigatório apenas se intent for 'conversa')"
-}
-Mapeamento: responder_conversa -> intent: 'conversa'.
-"""
-
-    async def transcribe_audio(self, audio_bytes: bytes, mime_type: str) -> str:
+    async def transcribe_audio(self, audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
         """
-        Transcreve áudio usando Groq Whisper com melhor tratamento de erro.
+        Transcreve áudio usando Groq Whisper.
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
         }
         
-        # WhatsApp costuma enviar ogg/opus. Groq é sensível à extensão.
-        # Se vier algo com ogg/opus, chamamos de .ogg. Caso contrário, .mp3 como fallback seguro.
+        # Extensão baseada no mime_type
         ext = "ogg" if "ogg" in mime_type.lower() or "opus" in mime_type.lower() else "mp3"
         filename = f"audio.{ext}"
         
@@ -142,7 +167,7 @@ Mapeamento: responder_conversa -> intent: 'conversa'.
             "file": (filename, audio_bytes, mime_type),
         }
         data = {
-            "model": "whisper-large-v3-turbo",
+            "model": "whisper-large-v3",
             "language": "pt",
             "response_format": "json"
         }
@@ -157,20 +182,18 @@ Mapeamento: responder_conversa -> intent: 'conversa'.
                     timeout=60.0
                 )
                 if response.status_code != 200:
-                    logger.error(f"[LLM-GROQ] Erro 400+ na Transcrição: {response.text}")
+                    logger.error(f"[LLM-GROQ] Erro na transcrição ({response.status_code}): {response.text}")
                 response.raise_for_status()
                 
                 result = response.json()
                 text = result.get("text", "").strip()
-                logger.info(f"[LLM-GROQ] Transcrição concluída: {text[:50]}...")
                 return text
             except Exception as e:
-                logger.error(f"[LLM-GROQ] Falha total na transcrição: {e}")
+                logger.error(f"[LLM-GROQ] Falha na transcrição: {e}")
                 return ""
-        
-        return ""
 
     async def generate_response(self, prompt: str) -> Dict[str, Any]:
+        """Geração de texto simples para chat direto."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -178,6 +201,7 @@ Mapeamento: responder_conversa -> intent: 'conversa'.
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7
         }
         async with httpx.AsyncClient() as client:
             try:
@@ -186,5 +210,4 @@ Mapeamento: responder_conversa -> intent: 'conversa'.
                 return {"reply_text": data["choices"][0]["message"]["content"]}
             except Exception as e:
                 logger.error(f"Erro em Groq generate_response: {e}")
-                return {"reply_text": ""}
-        return {"reply_text": ""}
+                return {"reply_text": "Erro ao gerar resposta."}

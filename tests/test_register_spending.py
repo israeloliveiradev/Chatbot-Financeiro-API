@@ -11,7 +11,7 @@ from src.domain.entities.spending import Spending
 async def test_register_spending_success():
     # Arrange
     mock_repo = AsyncMock()
-    # Simula a categoria 'Alimentação' esistente
+    # Simula a categoria 'Alimentação' existente
     mock_category = MagicMock()
     mock_category.id = uuid4()
     mock_category.name = "Alimentação"
@@ -29,10 +29,10 @@ async def test_register_spending_success():
     )
     
     # Assert
-    mock_repo.create.assert_called_once()
+    mock_repo.create_spending.assert_called_once()
     assert mock_repo.get_category_by_name.called
     # Verifica se os dados passados para o repo estão corretos
-    created_spending = mock_repo.create.call_args[0][0]
+    created_spending = mock_repo.create_spending.call_args[0][0]
     assert created_spending.amount == Decimal("50.00")
     assert created_spending.client_id == client_id
 
@@ -53,4 +53,4 @@ async def test_register_spending_category_not_found_fallback():
     
     # Assert
     assert mock_repo.get_category_by_name.call_count == 2
-    mock_repo.create.assert_called_once()
+    mock_repo.create_spending.assert_called_once()

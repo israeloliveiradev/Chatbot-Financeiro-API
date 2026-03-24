@@ -1,6 +1,7 @@
 import logging
 import httpx
 import os
+import asyncio
 from typing import Optional
 from src.infra.config import settings
 
@@ -37,21 +38,25 @@ class EvolutionClient:
             "linkPreview": False
         }
         
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                logger.info(f"Mensagem enviada para {number}")
-                return response.json()
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Erro HTTP ao enviar mensagem: {e.response.status_code} - {e.response.text}")
-            raise
-        except httpx.RequestError as e:
-            logger.error(f"Erro de rede ao enviar mensagem: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Erro inesperado ao enviar mensagem para {number}: {e}")
-            raise
+        success = False
+        last_error = None
+        
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    logger.info(f"Mensagem enviada para {number} (tentativa {attempt+1})")
+                    return response.json()
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Tentativa {attempt+1} falhou para {number}: {e}")
+                await asyncio.sleep(1 * (attempt + 1))
+        
+        logger.error(f"Falha total ao enviar mensagem para {number} após 3 tentativas: {last_error}")
+        if last_error is None:
+            raise Exception("Erro desconhecido ao enviar mensagem")
+        raise last_error
 
     async def send_presence(self, number: str, presence: str = "composing", delay: int = 2000):
         """
